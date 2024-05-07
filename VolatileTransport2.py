@@ -42,6 +42,7 @@ cspread = 1 # allow the 1 std diffusion of particles from one layer to maximally
 stdmax = cspread*dr # km
 dt = stdmax**2/(2*Dmax) # years, set the timestep long enough that std spread is at most _ layers
 stdmin = np.sqrt(2*Dmin*dt) # km
+number_of_timesteps = int(1e2) # compute the number of timesteps, PLACEHOLDER
 
 number_of_layers = number_of_boundaries-1
 layercenters = rk[:-1]+dr/2 # create array of distances from planetary center to center of each magma ocean sublayer
@@ -74,14 +75,22 @@ def massfromconvection(masses, sigmak, metsilfrac=0, Pik=0): # function for comp
         Mkprime += masses*(metsilfrac*Pik+1)**(-1)-np.sum(Mkprimek, axis=0) # add back the mass that was lost. Compare the source mass to the spread of the source mass and re-add the lost mass.
     return Mkprime
 
+def masschangefromsedimentation(masses, vmasses=Mvol, Pik=np.zeros(number_of_layers)): # function for computing the movement of volatiles between layers as resulting from descending metal blobs.
+    stepnumber = vmet*dt/dr # calculate the number of layers that metal blobs descend through during one convective timestep dt. 
+    massdifference = vmasses[1:]*Pik[1:]*Mmet/(masses[1:]+(Pik[1:]-1)*Mmet) - vmasses[:-1]*Pik[:-1]*Mmet/(masses[:-1]+(Pik[:-1]-1)*Mmet) # calculate descending volatile mass transfer from layers after the metal blobs descend 1 layerwidth.
+    outermassdifference = -vmasses[-1]*Pik[-1]*Mmet/(masses[-1]+(Pik[-1]-1)*Mmet) # calculate the volatile mass loss from the outermost layer
+    return stepnumber*np.append(massdifference, outermassdifference) # return the change in volatile mass in each layer as the result of sedimentation descent
+
 starttime = time.time()
 
+Mtot = np.copy(M0)
 Msil = np.copy(M0)
-for j in range(100):
+for j in range(number_of_timesteps):
     Msil = massfromconvection(Msil, stdmax, massfrac, 0)
     massfrac = Mmet/Msil
-    Mvol = np.array([massfromconvection(Mvol[i], stdmax, massfrac, Pik0[i])+vmassinmet[i] for i in irange]) # PLACEHOLDER, the added massfrac*vmass term corresponds to metal deposition speed = 0. 
+    Mvol = np.array([massfromconvection(Mvol[i], stdmax, massfrac, Pik0[i])+vmassinmet[i]+masschangefromsedimentation(Mtot, Mvol[i], Pik0[i]) for i in irange]) # PLACEHOLDER, the added massfrac*vmass term corresponds to metal deposition speed = 0. 
     vmassinmet = Mvol*(1+1/(massfrac*Pik0))**(-1)
+    Mtot = Msil+np.sum(Mvol, axis=0) # total mass in each layer
     
     # Use for subplots
     fig, (ax1, ax2) = plt.subplots(1, 2)
