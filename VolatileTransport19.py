@@ -417,14 +417,14 @@ def masschangefromsedimentation(masses, vmasses=Mvol, Pik=np.zeros(number_of_lay
 #-------------------------Transport of volatiles loop--------------------------
 
 # std = stdmax # Alt. 0: CONSTANT standard deviation of diffusion after a timestep dt for a point mass 
-std = np.sqrt(2*diffusivity(layercenters, pressure, temperature, density, menc(Mtot[:-1]))) # Alternative 1. Calculate diffusivity from Rayleigh number --> Nusselt number 
+std = np.sqrt(2*D*dt) # Alternative 1. Calculate diffusivity from Rayleigh number --> Nusselt number 
 # std = stdmax-stdmax/2*np.sin(pi*(rk[:-1]-rc)/(rs-rc)) # Alt. 2. PLACEHOLDER sinusoidal dip from constant standard deviation
 for j in range(number_of_timesteps):
     Mvolcopy = np.copy(Mvol) # copy how much volatile mass existed in previous timestep
     # Mvol = np.array([massfromconvection(Mvol[i], std, massfrac, Pik0[i])+vmassinmet[i]+masschangefromsedimentation(Mtot, Mvol[i], Pik0[i]) for i in irange]) # PLACEHOLDER, the added massfrac*vmass term corresponds to metal deposition speed = 0. 
     sedimentation = np.array([masschangefromsedimentation(Mtot, Mvol[i], Pik0[i]) for i in irange])
     Mvol = np.array([massfromrelativeconvection(Mvol[i], Msil, Mmet, std, Pik0[i])+vmassinmet[i] for i in irange])+sedimentation 
-    massdiff = np.sum(Mvolcopy)-np.sum(Mvol)
+    massdiff = np.sum(Mvolcopy)-np.sum(Mvol) # calculate mass difference from previous volatile mass
     
     vmassinmet = Mvol*(1+1/(massfrac*Pik0))**(-1)
     Mtot = Mmet+Msil+np.sum(Mvol, axis=0) # total mass in each layer
