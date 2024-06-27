@@ -443,7 +443,7 @@ def massfromrelativeconvection(Mvol, Msil, Mmet, sigmak, Pvk=0): # function for 
     print(rescalingfactor)
     return Xvkprime*Msil/rescalingfactor # approximate integral over one layer by calculating midpoint approximation of integral
 
-# Are we solving for Xv or rXv ? 
+# We are solving for rXv 
 def massfromrelativeconvection2(Mvol, Msil, Mmet, sigmak, Pvk=0): # function for computing the mass of volatiles moved by convection (diffusion) with silicate melt over one time step 
     Xv0 = Mvol/(Msil+Pvk*Mmet) # mass of volatiles in silicate melt in a layer / silicate mass in that layer
     kprimefactor = np.zeros_like(delrkcenter) # create matrix [k', k] to be filled 
@@ -454,10 +454,15 @@ def massfromrelativeconvection2(Mvol, Msil, Mmet, sigmak, Pvk=0): # function for
         kprimefactor += erf(W)+erf(W+Y)-erf(Wminus)-erf(Wminus+Y)
     Xvkprime = np.sum(layercenters*Xv0/2*kprimefactor, axis=1)/layercenters # density of volatiles in layer k' moved there by convection (diffusion) in silicate melt divided by the density of silicate in that layer
     retmass = Xvkprime*Msil
+    # incorrect BC means our solution yields mass gain/loss at inner/outer boundary
+    rcmassgain = (Xv0[0]+Xvkprime[0])*sigmak[0]**2*rk[0]*pi*Msil[0]/layervolumes[0] # spurious mass gain entering at r = rc
+    rsmassloss = (Xv0[-1]+Xvkprime[-1])*sigmak[-1]**2*rk[-1]*pi*Msil[-1]/layervolumes[-1] # spurious mass loss exiting at r = rs
+    retmass[0] -= rcmassgain # remove the mass gained
+    retmass[-1] += rsmassloss # add the mass lost
     rescalingfactor = np.sum(retmass)/np.sum(Mvol) # find rescaling to conserve mass
     print(rescalingfactor)
     return Xvkprime*Msil/rescalingfactor # approximate integral over one layer by calculating midpoint approximation of integral
-    
+
 def explicitdiffusion(Mvol, Msil, Mmet, Drho, Pvk=0): # explicit diffusion scheme for diffusive (convective) motion of volatiles
     Xv0 = Mvol/(Msil+Pvk*Mmet) # mass of volatiles in silicate melt in a layer / silicate mass in that layer
     deltaXv = np.transpose(delta(np.transpose(Xv0))) # calculate difference between Xv for adjacent layers. Array is one element shorter than number of layers
@@ -482,7 +487,7 @@ for j in range(number_of_timesteps):
     # Mvol = np.array([massfromconvection(Mvol[i], std, massfrac, Pik0[i])+vmassinmet[i]+masschangefromsedimentation(Mtot, Mvol[i], Pik0[i]) for i in irange]) # PLACEHOLDER, the added massfrac*vmass term corresponds to metal deposition speed = 0. 
     sedimentation = np.array([masschangefromsedimentation(Mtot, Mvol[i], Pik0[i]) for i in irange])
     if relativeconvection: 
-        Mvol = np.array([massfromrelativeconvection2(Mvol[i], Msil, Mmet, np.mean(std), Pik0[i])+vmassinmet[i] for i in irange])+sedimentation 
+        Mvol = np.array([massfromrelativeconvection2(Mvol[i], Msil, Mmet, std, Pik0[i])+vmassinmet[i] for i in irange])+sedimentation 
     elif explicit:
         Drhocenter = np.append(np.concatenate(([0], centeraveraging(D*density))), 0) # calculate product of diffusivity and density at layer boundaries. Assign a value of 0 at core mantle boundary and surface boundary (because it is being elementwise multiplied by diffusion flux across the boundary, which is 0 at the core mantle boundary and 0 at the surface either way)
         Mvol = np.array([explicitdiffusion(Mvol[i], Msil, Mmet, Drhocenter, Pik0[i])+vmassinmet[i] for i in irange])+sedimentation 
