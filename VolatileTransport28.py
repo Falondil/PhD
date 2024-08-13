@@ -91,9 +91,10 @@ heatconductivity = 4*31425635.8
 K0 = 200  # bulk modulus, GPa
 K0prime = 4  # bulk modulus derivative w.r.t pressure
 Mearthatm = 5.15e6  # Pg, current mass of Earth's atmosphere
-Matm = planetscaling*Mearthatm  # Pg, mass of the atmosphere of the protoplanet modelled
+atmospherescaling = 93 
+Matm = atmospherescaling*Mearthatm*planetscaling  # Pg, mass of the atmosphere of the protoplanet modelled
 psurf = 10/1e4  # surface pressure, GPa. corresponds to 10 bar. PLACEHOLDER
-opacity = 55 # km2 Pg-1, PLACEHOLDER
+opacity = 1e4 # km2 Pg-1, PLACEHOLDER
 Tsurf = 2400  # surface temperature, K. 1600 K from Tackley2012, 3200 K from Monteux2016 PLACEHOLDER
 deltaT = 1000  # temperature above that of an adiabat at the core with same surface temperature, K, PLACEHOLDER
 # converts specific heat capacity from units of J kg-1 K-1 to km2 yr-2 K-1
@@ -591,11 +592,14 @@ gsurf = G*Menc[-1]/rs0**2  # gravity at surface
 
 # atmosphere initialization
 Ltot = accretionluminosityatmosphere(pebblerate, rs0, protomass) # full pebble luminosity 
-atmgamma = 7/5 # adiabatic index of the atmosphere
+monoatomicgamma = 5/3
+diatomicgamma = 7/5
+triatomicgamma = 8/6
+atmgamma = triatomicgamma  # adiabatic index of the atmosphere
 psurf = gsurf*Matm/(4*pi*rs0**2)*GPaconversion # GPa, pressure at surface
 ppho = 2/3*gsurf/opacity*GPaconversion
 Tpho = (Ltot/(4*pi*rs0**2*Boltzmann))**(1/4) # temperature at the base of the photosphere
-Tsurf
+Tsurf = Tpho*(psurf/ppho)**((atmgamma-1)/atmgamma) # 
 
 surfacetemp = 3000  # K
 
