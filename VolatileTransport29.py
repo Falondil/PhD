@@ -8,33 +8,37 @@ Created on Thu Apr 11 12:00:06 2024
 import sys
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.colors as pltcolors
 from scipy.special import erf
 import math
 import time
 
 # choices
-simulatedtime = 1e5  # yr
+fullformationtime = False # decide if the simulated time should be the time for accreting the mass of the planet
+evendist = True  # decide initial distribution of volatiles to have a constant mass concentration throughout magma ocean
+# decide initial distribution of volatiles to be concentrated in the layer closest to the core
+innerdelta = not evendist
 
 # decide to use analytical infinite series expression of diffusive motion from Dirk Veestraeten 2004.
 RBMdirk = True
 # decide how many positive and negative n terms of the infinite series expansion of 1/sinh to use in the PDF expression.
 RBMnterms = 10
+addtosource = False  # decide if mass spread outside the inner and outer magma ocean boundaries should be re-added to the source layer
+# decide to rescale the derived mass from convection transport equation by r^2 to turn 1D solution to 3D.
+r2factor = True
 relativeconvection = False  # use Veestraeten2004 solution to RBM
+
 explicit = not relativeconvection  # decide if explicit diffusion scheme is used
-evendist = True  # decide initial distribution of volatiles to have a constant mass concentration throughout magma ocean
-# decide initial distribution of volatiles to be concentrated in the layer closest to the core
-innerdelta = not evendist
 
 constantdensity = False  # decide to use the uncompressed silicate density throughout
 # decide to use a truncated & renormalized normal distribution for the spread of mass
 renormdist = False
-addtosource = False  # decide if mass spread outside the inner and outer magma ocean boundaries should be re-added to the source layer
-# decide to rescale the derived mass from convection transport equation by r^2 to turn 1D solution to 3D.
-r2factor = True
+
+consistentdiffusivity = True # for the convection modelling use the diffusivity that balances the pebble accretion luminosity with the energy transport
 
 cspread = 1  # allow the 1 std diffusion of particles from one layer to maximally spread _ layers
 if explicit:
-    cspread = 1  # can't have too much spread if diffusion only transports to nearest layer
+    cspread = 0.1  # can't have too much spread if diffusion only transports to nearest layer
 plotstepspacing = 1  # Every n timesteps plots are printed
 # plot at most ___ plots. Redefines plotstepspacing if necessary
 max_number_of_plots = 200
@@ -60,6 +64,7 @@ densityconversion = 1e3  # converts from Pg km-3 to kg m-3
 secondsperyear = 31556926  # 31 556 926 seconds per year
 
 # units: years, km, Pg (Petagram)
+simulatedtime = 1e5 # yr
 rc = 3480 # km
 coreradiusfraction = 3480/6371  # Earth's Core chapter by David Loper. PLACEHOLDER
 vmet = 1*secondsperyear/1e3  # 1 m/s in km yr-1, falling speed of metal blobs
@@ -75,6 +80,13 @@ pebblemetalfrac = 0.3  # mass fraction of metal (iron) in accreted pebbles
 G = 66465320.9  # gravitational constant, km3 Pg-1 yr-2
 Boltzmann = 1781.83355 # Boltzmann constant sigma = 5.67*1e-8 W/m^2 K^-4 converted to Petagram year^-3 K^-4
 
+# unitless
+monoatomicgamma = 5/3 # 1.666666
+diatomicgamma = 7/5 # 1.4
+triatomicgamma = 8/6 # 1.3333
+lowgamma = 1.25 # higher temperatures --> lower Cp, lower Cp/Cv. 
+atmgamma = triatomicgamma  # adiabatic index of the atmosphere
+
 # Alternative. Not bad but perhaps insufficient as a guarantee so better not unless it works
 if fixedplanetmass:
     planetscaling = 1
@@ -83,6 +95,9 @@ if fixedplanetmass:
     rs0 = ((protomass-mc)/(4*pi*silicatedensity/3)+rc**3)**(1/3)
 else:
     rs0 = 6371  # km
+
+if fullformationtime: # rewrite simulatedtime to the time for the formation of the specified protoplanet's mass
+    simulatedtime = protomass/pebblerate # year 
 
 # compression and expansion values
 alpha0 = 3e-5  # volumetric thermal expansion coefficient, K-1
@@ -94,7 +109,7 @@ Mearthatm = 5.15e6  # Pg, current mass of Earth's atmosphere
 atmospherescaling = 93 # how much thicker atmosphere than current Earth
 Matm = atmospherescaling*Mearthatm*planetscaling  # Pg, mass of the atmosphere of the protoplanet modelled
 psurf = 10/1e4  # surface pressure, GPa. corresponds to 10 bar. PLACEHOLDER
-opacity = 1e4 # km2 Pg-1, PLACEHOLDER
+opacitypho = 1e-3*1e6  # (gray) Rosseland mean opacity. 1e6 factor for conversion from m^2 kg^-1 to km^2 Pg^-1, PLACEHOLDER
 Tsurf = 2400  # surface temperature, K. 1600 K from Tackley2012, 3200 K from Monteux2016 PLACEHOLDER
 deltaT = 1000  # temperature above that of an adiabat at the core with same surface temperature, K, PLACEHOLDER
 # converts specific heat capacity from units of J kg-1 K-1 to km2 yr-2 K-1
@@ -404,6 +419,9 @@ def temperaturefromdeltaTad(deltaTad, r, Tad):
     T = Tad + deltaTad*(r[-1]-r)/(r[-1]-r[0])
     return T
 
+def DfromNu(Nu, density, temperature, K=heatconductivity): # calculate the diffusivity from the Nusselt number
+    D = np.mean(Nu*K/(density*Cpfunc(temperature)))
+    return D
 
 # integrates down from top of magma ocean to bottom to find the temperature profile
 def equilibriumtemperature(Lmet, rvar, drvar, NuK, magmasurfacetemperature):
@@ -592,13 +610,8 @@ gsurf = G*Menc[-1]/rs0**2  # gravity at surface
 
 # atmosphere initialization
 Ltot = accretionluminosityatmosphere(pebblerate, rs0, protomass) # full pebble luminosity 
-monoatomicgamma = 5/3 # 1.666666
-diatomicgamma = 7/5 # 1.4
-triatomicgamma = 8/6 # 1.3333
-lowgamma = 1.25 # higher temperatures --> lower Cp, lower Cp/Cv. 
-atmgamma = lowgamma  # adiabatic index of the atmosphere
 psurf = gsurf*Matm/(4*pi*rs0**2)*GPaconversion # GPa, pressure at surface
-ppho = 2/3*gsurf/opacity*GPaconversion
+ppho = 2/3*gsurf/opacitypho*GPaconversion
 Tpho = (Ltot/(4*pi*rs0**2*Boltzmann))**(1/4) # temperature at the base of the photosphere
 Tsurf = Tpho*(psurf/ppho)**((atmgamma-1)/atmgamma)
 
@@ -686,7 +699,25 @@ for j in range(number_of_structure_timesteps):
 compressioncalctime = time.time()-starttime
 
 # -----------------------------Parametrized functions---------------------------
+def IWfO2(p, T): # oxygen fugacity of the IW-buffer Fe + O <-> FeO. Hirschmann2021. Valid for T>1000 K and P between 1e-4 and 100 GPa.
+    def m(m0, m1, m2, m3, m4):
+        return m0+m1*p+m2*p**2+m3*p**3+m4*p**(1/2)
+    # parameters for fit to fcc (gamma-Fe) and bcc (alpha-Fe) allotropes of iron
+    a = m(6.844864, 1.175691e-1, 1.143873e-3, 0, 0)
+    b = m(5.791364e-4, -2.891434e-4, -2.737171e-7, 0, 0)
+    c = m(-7.971469e-5, 3.198005e-5, 0, 1.059554e-10, 2.014461e-7)
+    d = m(-2.769002e4, 5.285977e2, -2.919275, 0, 0)
+    # parameters for fit to hcp (epsilon-Fe) allotrope of iron
+    e = m(8.463095, -3.000307e-3, 7.213445e-5, 0, 0)
+    f = m(1.148738e-3, -9.352312e-5, 5.161592e-7, 0, 0)
+    g = m(-7.448624e-4, -6.329325e-6, 0, -1.407339e-10, 1.830014e-4)
+    h = m(-2.782082e4, 5.285977e2, -8.473231e-1, 0, 0)
 
+    hcpdomain = p>(-18.64 + 0.04359*T - 5.069e-6*T**2) # check for what p, T the iron is hcp
+    def fit(P1, P2, P3, P4): # fitting function using either (a,b,c,d) or (e,f,g,h)
+        return P1+P2*T+P3*T*np.log(T)+P4/T
+    log10fO2 = np.where(hcpdomain, fit(e,f,g,h), fit(a,b,c,d))
+    return 10**log10fO2
 
 # Carbon partition coefficient. Parametrization from Fischer2020. Pressure, temperature in GPa, K units.
 def PCk(p, T, deltaIW=-2.2, Xsulfur=0, Xoxygen=0, NBOperT=2.6, microprobe=False):
@@ -740,6 +771,20 @@ layervolumes = 4*pi*(rk[1:]**3-rk[:-1]**3)/3
 pressure = np.interp(layercenters, rsvar, pressurelong)
 temperature = np.interp(layercenters, rsvar, temperaturelong)
 
+# plot oxygen fugacity as function of p, T. Add our own p, T curve. 
+X, Y = np.meshgrid(pressure, temperature)
+Z = np.array([np.log10(IWfO2(p,t)) for p in pressure for t in temperature]).reshape(number_of_layers, number_of_layers)
+IWfig = plt.figure()
+CS = plt.contourf(X,Y,Z,20)
+cbar = IWfig.colorbar(CS)
+plt.plot(pressure, temperature, color='k') #, norm=pltcolors.TwoSlopeNorm(0), cmap='bwr' can be used
+# invert axes so that going to the left or going down on the plot corresponds to further into the magma ocean
+plt.gca().invert_xaxis()
+plt.gca().invert_yaxis()
+plt.title('log Oxygen fugacity at the IW-buffer')
+plt.xlabel('Pressure [GPa]')
+plt.ylabel('Temperature [K]')
+
 # initial volatile distribution
 # initial mass fraction of volatiles, PLACEHOLDER
 fi0 = 0.1*np.array([1/2, 1/3, 1/4, 1/5])
@@ -754,12 +799,10 @@ Mencsilunc = menc(Msilunc)[:-1]  # uncompressed enclosed silicate mass
 
 if constantdensity:
     sildensity = np.ones(number_of_layers)*silicatedensity
-    density = sildensity + 
     Msil = silicatedensity*layervolumes
 else:
     # Mass interpolated from compressed densities
-    Msil, sildensity = massanddensityinterpolation(rk, dr, rsvar, densitylong)
-    density = 
+    Msil, sildensity = massanddensityinterpolation(rk, dr, rsvar, densitylong) 
 # constant mass [Pg] for the metal in any one layer resulting from isotropic accretion with constant falling speed.
 Mmet = pebblerate*pebblemetalfrac*dr/vmet
 massfrac = Mmet/Msil  # Metal silicate fraction in each magma ocean sublayer
@@ -779,7 +822,10 @@ vmassinmet = Mvol*(1+1/(massfrac*Pik0))**(-1)
 # Dmax = Dmin*1e3 # "2 to 3 orders of magnitude greater than for Vesta"
 
 # calculate the diffusivity --> standard deviation
-D = diffusivity(layercenters, pressure, temperature, density, centeraveraging(
+if consistentdiffusivity:
+    D = DfromNu(NufromRa(Ra), sildensity, temperature) # Calculate D from the Rayleigh number used to find the temperature profile
+else: # calculate diffusivity from analytical expression of Ra
+    D = diffusivity(layercenters, pressure, temperature, sildensity, centeraveraging(
     menc(Msil)), temperaturelong[0]-adiabattemperature[0], magmadepth)
 Dmax = np.max(D)
 stdmax = cspread*dr  # km
@@ -924,7 +970,7 @@ def masschangefromsedimentation(masses, vmasses=Mvol, Pik=np.zeros(number_of_lay
     # calculate the volatile mass loss from the outermost layer
     outermassdifference = -vmasses[-1] * \
         Pik[-1]*Mmet/(masses[-1]+(Pik[-1]-1)*Mmet)
-    outermassdifference = 0 # static from atmosphere interaction
+    # outermassdifference = 0 # static from atmosphere interaction
     # return the change in volatile mass in each layer as the result of sedimentation descent
     return stepnumber*np.append(massdifference, outermassdifference)
 
@@ -947,7 +993,7 @@ for j in range(number_of_timesteps):
     elif explicit:
         # calculate product of diffusivity and density at layer boundaries. Assign a value of 0 at core mantle boundary and surface boundary (because it is being elementwise multiplied by diffusion flux across the boundary, which is 0 at the core mantle boundary and 0 at the surface either way)
         Drhocenter = np.append(np.concatenate(
-            ([0], centeraveraging(D*density))), 0)
+            ([0], centeraveraging(D*sildensity))), 0)
         Mvol = np.array([explicitdiffusion(Mvol[i], Msil, Mmet, Drhocenter,
                         Pik0[i])+vmassinmet[i] for i in irange])+sedimentation
     # calculate mass difference from previous volatile mass
