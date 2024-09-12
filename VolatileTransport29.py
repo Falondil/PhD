@@ -106,9 +106,9 @@ heatconductivity = 4*31425635.8
 K0 = 200  # bulk modulus, GPa
 K0prime = 4  # bulk modulus derivative w.r.t pressure
 Mearthatm = 5.15e6  # Pg, current mass of Earth's atmosphere
-atmospherescaling = 93 # how much thicker atmosphere than current Earth
+atmospherescaling = 93 # how much thicker atmosphere than current Earth, PLACEHOLDER
 Matm = atmospherescaling*Mearthatm*planetscaling  # Pg, mass of the atmosphere of the protoplanet modelled
-psurf = 10/1e4  # surface pressure, GPa. corresponds to 10 bar. PLACEHOLDER
+psurf = 100/1e4  # surface pressure, GPa. corresponds to 10 bar. PLACEHOLDER
 opacitypho = 1e-3*1e6  # (gray) Rosseland mean opacity. 1e6 factor for conversion from m^2 kg^-1 to km^2 Pg^-1, PLACEHOLDER
 Tsurf = 2400  # surface temperature, K. 1600 K from Tackley2012, 3200 K from Monteux2016 PLACEHOLDER
 deltaT = 1000  # temperature above that of an adiabat at the core with same surface temperature, K, PLACEHOLDER
@@ -193,8 +193,8 @@ def solidus(pressure):  # calculate the liquidus temperature as a function of pr
     return np.where(pressure < 20, Tsolidus(1661.2, 1.336, 1/7.437), Tsolidus(2081, 101.69, 1/1.226))
 
 
-# calculates the pressure by integrating the density*gravitation down from the surface
-def pressurefunc(rvar, drvar, density, Menc):
+# calculates the pressure by integrating the density*acceleration due to gravity down from the surface
+def pressurefunc(rvar, drvar, density, Menc, psurf):
     # flip the array of layerboundaries so it is ordered from the top down. r = rs excluded so last element cut before flip.
     rflip = np.flip(rvar[:-1])
     drflip = np.flip(drvar)
@@ -203,7 +203,7 @@ def pressurefunc(rvar, drvar, density, Menc):
     return np.append(np.flip(psurf+GPaconversion*G*np.cumsum(densityflip*(2*pi/3*densityflip*(2*rflip*drflip+drflip**2)+(Mencflip-4*pi/3*rflip**3*densityflip)*(1/rflip-1/(rflip+drflip))))), psurf)
 
 
-def pressurefunc2(rvar, drvar, density, Menc):
+def pressurefunc2(rvar, drvar, density, Menc, psurf):
     # flip the array of layerboundaries so it is ordered from the top down. r = rs excluded so last element cut before flip.
     rflip = np.flip(rvar[:-1])
     drflip = np.flip(drvar)
@@ -363,6 +363,7 @@ def accretionluminositysingle(accretedmassrate, rvar, drvar, Menc):
     # potential energy lost per unit time from moving from the surface to the core mantle boundary
     CMBterm = accretedmassrate*G*np.sum(centeraveraging(Menc/rsvar**2)*drsvar)
     Lmet = surfaceterm+CMBterm  # total luminosity is the sum
+    print(str(surfaceterm), str(CMBterm))
     return Lmet
 
 # luminosity from accretion if heat is transferred to the magma much quicker than the metal falling speed
@@ -609,7 +610,7 @@ Menc = np.copy(Menc0)
 gsurf = G*Menc[-1]/rs0**2  # gravity at surface
 
 # atmosphere initialization
-Ltot = accretionluminosityatmosphere(pebblerate, rs0, protomass) # full pebble luminosity 
+Ltot = accretionluminosityatmosphere(pebblerate, rs0, protomass)#+accretionluminositysingle(pebblerate*pebblemetalfrac, rs, drs, Menc0) # full pebble luminosity 
 psurf = gsurf*Matm/(4*pi*rs0**2)*GPaconversion # GPa, pressure at surface
 ppho = 2/3*gsurf/opacitypho*GPaconversion
 Tpho = (Ltot/(4*pi*rs0**2*Boltzmann))**(1/4) # temperature at the base of the photosphere
@@ -621,9 +622,9 @@ Tsurf = Tpho*(psurf/ppho)**((atmgamma-1)/atmgamma)
 # initial density is assumed to be constant
 initialdensity = np.repeat(silicatedensity, number_of_structure_boundaries)
 # initialpressure0 = psurf + GPaconversion*2*pi/3*silicatedensity**2*G*(rs**2-rs**2) # SOMETHING IS WRONG HERE. initial pressure in the magma ocean layerboundaries resulting from constant density profile, GPa
-initialpressure = pressurefunc(rs, delta(rs), initialdensity, Menc)
+initialpressure = pressurefunc(rs, delta(rs), initialdensity, Menc, psurf)
 # Alternate way to calc. pressure
-initialpressure2 = pressurefunc2(rs, delta(rs), initialdensity, Menc)
+initialpressure2 = pressurefunc2(rs, delta(rs), initialdensity, Menc, psurf)
 initialtemperature, adiabattemperature = Tsurf+np.zeros(number_of_structure_boundaries), Tsurf+np.zeros(
     number_of_structure_boundaries)  # set cold initial temperature profile
 pressurelong = np.copy(initialpressure)
@@ -635,7 +636,7 @@ for j in range(number_of_structure_timesteps):
     # resize the layers according to the new density
     rsvar = newlayerboundaries(Msil, densitylong)
     drsvar = delta(rsvar)
-    pressurelong = pressurefunc(rsvar, drsvar, densitylong, Menc)
+    pressurelong = pressurefunc(rsvar, drsvar, densitylong, Menc, psurf)
     Lmet = accretionluminosity(
         pebblerate*pebblemetalfrac, rsvar, drsvar, Menc, False)
     # calculate adiabatic temperature profile with the same surface temperature as the real temperature profile
@@ -645,7 +646,7 @@ for j in range(number_of_structure_timesteps):
     temperaturegradient = (
         adiabattemperature[0]-adiabattemperature[-1])/(rsvar[-1]-rc)
     # calculate the Rayleigh number
-    Ra = RafromL(Lmet, rc, temperaturegradient, heatconductivity)
+    Ra = RafromL(Lmet, rsvar[-1], temperaturegradient, heatconductivity)
     print(Ra)
     deltaTad = deltaTadfromRa(
         Ra, rsvar, pressurelong, temperaturelong, densitylong, Menc, heatconductivity)
