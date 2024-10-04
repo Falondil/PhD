@@ -584,3 +584,30 @@ if evendist:
 
 
 #------------------------------Transport functions-----------------------------
+
+#-------------------convection (diffusion) and sedimentation-------------------
+
+
+
+#----------------atmosphere & magma ocean top layer interaction----------------
+# Miatm - resulting vector of masses of each volatile species in the atmosphere once equilibriated
+# AMUi - atomic mass units of volatile species i
+# alphai - vector for the powers for the dissolution law of the volatile species i's dissolution into the magma ocean
+# Ki - equilibrium constants for the dissolution reactions
+# Mitot0 - total mass of volatile species i in the top layer of the magma ocean and the atmosphere before equilibriation 
+
+# sensitive to degree of input arrays, be careful
+def Miatmeqfunc(Miatm0, AMUi, alphai, Ki, Msilmet, Mitot0): # function to find the dissolution equilbrium solution of the mass of volatile species in the atmosphere
+    def Miatmrootfunc(Miatm): # function of Miatm that evaluates to 0 at chemical dissolution equilbrium between top layer of magma ocean and the atmosphere
+        Mtot0 = Msilmet+np.sum(Mitot0) # total mass of the top layer before equilibriation
+        frac = Miatm/AMUi
+        # return Miatm+(Ki*frac/np.sum(frac))**(1/alphai)*(Mtot0-np.sum(Miatm))-Mitot0
+        return 1/Mitot0*(Miatm+(Ki*frac/np.sum(frac))**(1/alphai)*(Mtot0-np.sum(Miatm)))-1 # better to solve for the unitless equation = 0
+
+    Miatmeq = fsolve(Miatmrootfunc, Miatm0) # find roots to the function with a starting guess being the unequilibrated atmospheric mass of the volatile species.
+    print(np.isclose(Miatmrootfunc(Miatmeq), np.zeros_like(Miatmeq))) # check if roots are valid
+    
+    Miktop = Mitot0-Miatmeq # mass of volatile in magma ocean = total volatile mass minus volatile mass in atmosphere
+    Xiktop = Miktop/(Msilmet+np.sum(Miktop))
+    return Miatmeq, Xiktop
+

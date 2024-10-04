@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as pltcolors
 import time
 from scipy.optimize import fsolve
+from scipy.optimize import broyden1
 
 # choices
 fullformationtime = False # decide if the simulated time should be the time for accreting the mass of the planet
@@ -584,3 +585,51 @@ if evendist:
 
 
 #------------------------------Transport functions-----------------------------
+
+def massfraction(partialmasses, layermasses): # computes mass fraction of a mass compared to the total
+    return partialmasses/(layermasses+np.sum(partialmasses, 0))
+
+
+#-------------------convection (diffusion) and sedimentation-------------------
+
+
+
+#----------------atmosphere & magma ocean top layer interaction----------------
+# Matm - mass of the atmosphere
+# Miatm0 - starting masses of each volatile species in the atmosphere
+# Misil0 - starting masses of each volatile species in the top layer of the magma ocean (silicate melt)
+# Mitot0 - starting masses of each volatile species in either the atmosphere of top layer of the magma ocean
+# AMUi - atomic mass units of volatile species i
+# alphai - vector for the powers for the dissolution law of the volatile species i's dissolution into the magma ocean
+# Ki - equilibrium constants for the dissolution reactions
+# Msilmet - silicate + metal mass in top layer of magma ocean 
+# Xiktop - mass fraction of volatiles in the top layer of the magma ocean
+
+# returns masses of each volatile in the first atmosphere to be in equilibrium with the assumed starting volatile fraction in the silicate melt of the top layer of the magma ocean
+def startingatmosphere(Matm, Xiktop, AMUi, alphai, Ki):
+    frac = Xiktop**alphai*AMUi/Ki
+    Miatm0 = frac/np.sum(frac)*Matm
+    return Miatm0
+
+def Kinoneq(Xiktop, Miatm0, AMUi, alphai): # calculates the Ki corresponding to if the non-equilbriated dissolution was in fact an equilibrium
+    frac = Miatm0/AMUi
+    return Xiktop**alphai/(frac/np.sum(frac))
+
+# sensitive to degree of input arrays, (and actual values of input parameters) be careful
+def Miatmeqfunc(Miatm0, AMUi, alphai, Ki, Msilmet, Misil0, method='fsolve'): # function to find the dissolution equilbrium solution of the mass of volatile species in the atmosphere 
+    Mitot0 = Miatm0+Misil0 # sum of volatiles in either reservoir before equilibriation
+    def Miatmrootfunc(Miatm): # function of Miatm that evaluates to 0 at chemical dissolution equilbrium between top layer of magma ocean and the atmosphere
+        Mtot0 = Msilmet+np.sum(Mitot0) # total mass of the top layer before equilibriation
+        frac = Miatm/AMUi
+        # return Miatm+(Ki*frac/np.sum(frac))**(1/alphai)*(Mtot0-np.sum(Miatm))-Mitot0
+        return 1/Mitot0*(Miatm+(Ki*frac/np.sum(frac))**(1/alphai)*(Mtot0-np.sum(Miatm)))-1 # better to solve for the unitless equation = 0
+    if method=='fsolve': # appears to be stably solver further from equilibrium starting guesses
+        Miatmeq = fsolve(Miatmrootfunc, Miatm0) # find roots to the function with a starting guess being the unequilibrated atmospheric mass of the volatile species.
+    else:
+        Miatmeq = broyden1(Miatmrootfunc, Miatm0, f_tol=1e-8) # use Broyden's good method instead
+    print(np.isclose(Miatmrootfunc(Miatmeq), np.zeros_like(Miatmeq))) # check if roots are valid
+    
+    Misileq = Mitot0-Miatmeq # mass of volatile in magma ocean = total volatile mass minus volatile mass in atmosphere
+    Xiktop = massfraction(Misileq, Msilmet) # mass fraction of volatile in top layer of magma ocean
+    return Miatmeq, Misileq, Xiktop, Miatmeq/Miatm0
+
