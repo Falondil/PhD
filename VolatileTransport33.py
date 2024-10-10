@@ -13,7 +13,7 @@ import time
 from scipy.optimize import fsolve
 from scipy.optimize import broyden1
 
-# choices
+# CHOICEs
 fullformationtime = False # decide if the simulated time should be the time for accreting the mass of the planet
 evendist = True  # decide initial distribution of volatiles to have a constant mass concentration throughout magma ocean
 # decide initial distribution of volatiles to be concentrated in the layer closest to the core
@@ -60,7 +60,8 @@ GPaconversion = 1.0041778e-15  # conversion to GPa from Pg, km, year units
 densityconversion = 1e3  # converts from Pg km-3 to kg m-3
 secondsperyear = 31556926  # 31 556 926 seconds per year
 Cpconv = 995839577 # converts specific heat capacity from units of J kg-1 K-1 to km2 yr-2 K-1
-GPatobar = 1e4
+GPatobar = 1e4 # converts from GPa to bar
+GPatokbar = GPatobar/1e3 # converts from GPa to kbar
 
 # units: years, km, Pg (Petagram)
 G = 66465320.9  # gravitational constant, km3 Pg-1 yr-2
@@ -79,7 +80,7 @@ venusmass = 4.86732e12 # Venus' mass in Pg
 pebblerate = 1*earthmass/5e6 # Pg yr-1, PLACEHOLDER VALUE, x order(s) of magnitude less than what is required to form a 1 Earth mass planet over 5 Myr.
 pebblemetalfrac = 0.3  # mass fraction of metal (iron) in accreted pebbles
 
-# Set planet mass, initial uncompressed radius is determined from choice of planet mass
+# Set planet mass, initial uncompressed radius is determined from CHOICE of planet mass
 if fixedplanetmass:
     massscaling = 1
     # Earth was less massive before Theia giant impact. Perhaps core mass should be lower too pre-giant impact.
@@ -431,8 +432,8 @@ dr = rk[1]-rk[0] # same layerwidth for all layers
 layercenters = centeraveraging(rk)
 layervolumes = volumefunc(rk) # calculate volume of each magma ocean layer 
 Mmet = pebblerate*pebblemetalfrac*dr/vmet # metal inside each layer, LET PEBBLERATE CHANGE?
-Mtot = density*layervolumes # compressed density*volume is total mass of metal + silicates
-Msil = Mtot-Mmet # subtract mass of metal to get mass of silicates in each magma ocean layer 
+Msilmet = density*layervolumes # compressed density*volume is total mass of metal + silicates
+Msil = Msilmet-Mmet # subtract mass of metal to get mass of silicates in each magma ocean layer 
 # uncompressed for plotting comparison 
 Msilunc = silicatedensity*layervolumes
 Mencsilunc = menc(Msilunc)[:-1]  # uncompressed enclosed silicate mass
@@ -521,44 +522,144 @@ plt.xlabel('Pressure [GPa]')
 plt.ylabel('Temperature [K]')
 
 #------------------------------Volatile Transport------------------------------
+def massfraction(partialmasses, layermasses): # computes mass fraction of a mass compared to the total
+    return partialmasses/(layermasses+np.sum(partialmasses, 0))
+
+
+#----------------atmosphere & magma ocean top layer interaction----------------
 
 def molefraction(wi, amui, wj, amuj): # takes weight fraction of volatile species i and calculates the mole fraction of species i using the atomic mass of i as well as the weight fraction and atomic mass of all other volatile species j (wj and amuj are arrays)
     return (wi/amui)/(wi/amui+np.sum(wj*amuj))
 
-# molar masses of volatiles
+# molar masses of volatile gas species
 amuH2O = 18 
 amuCO2 = 44 
+amuN2 = 28 
+amui = np.array([amuH2O, amuCO2, amuN2])
+
+# molar masses of the atoms
+amuC = 12
+amuN = 14
+
+# molar masses of melt species
+amuOH = 17
+amuCO3 = 60
+amuNH = 15
+amuNH2 = 16
+amuNH3 = 17
+
+# melt properties
+melt = 'enstatite'
+NBOperT = 2.2 # CHOICE
+if melt=='enstatite': # MgSiO3 simplified. Same resulting product if considering Mg2Si2O6 instead since amuMelt is doubled and Siperformula becomes is halved. 
+    amuMelt = 100 
+    TperSi = 1 # one Mg for each Si
+    Siperformula = 1
+else: # forsterite, Mg2SiO4
+    amuMelt = 140
+    TperSi = 2 # two Mg for each Si
+    Siperformula = 1 # 1 Si in the unit formula
+
+# number of volatile-bearing products per volatile reactant
+alphaH2O = 2 # H2O(gas) + O(melt) = 2 OH(melt) e.g. Stolper1982. 
+alphaCO2 = 1 # CO2(gas) + O(melt) = CO3(melt) e.g. Ortenzi2016, Fegley2020. Or more accurately M2SiO4(melt)+CO2(g) = MCO3(melt) + MSiO3(melt) e.g. Spera1980. 
+alphaNH_ = 2 # N2(gas)+_*H2O(gas)+(3-_)*O(melt) = 2 NH_ + 3/2 O(gas) e.g. Grewal2020.
+alphai = np.array([alphaH2O, alphaCO2, alphaNH_]) 
+
+# conversion factor from fraction of NBO that get a volatile attached to them to mass fraction of the volatile atoms inside the melt
+betai = NBOperT*TperSi*Siperformula/amuMelt*np.array([amuH2O, amuC, amuN]) # PLACEHOLDER, using amuH2O to count H. 
+
+# equilibrium coefficients
+KH2O = 0.1*np.exp(-3+(psurf*GPatokbar)/10) # Stolper1982, fig. 4 and eq. 8. Product of K1 and K2. Slopes up one log unit after 10 kbar.
+KCO2withNepheline = np.exp(-12.5-5.5*psurf*GPatokbar/30) # Spera1980, fig. 1. Minus sign since we want the reverse equilibrium constant
+KCO2withOlivineMelilite =  np.exp(-13-5*psurf*GPatokbar/30) # Spera1980, fig. 3. -||-
+KCO2 = KCO2withNepheline # CHOICE
+KN2 = KH2O*1e-8 # PLACEHOLDER. FIND A REAL VALUE
+
+Ki = np.array([KH2O, KCO2, KN2])
 
 # initial mass fraction of volatiles in melt, PLACEHOLDER
-fH2O = 2e3*1e-6 # 2e3 ppmw, Anatomy
-fC = 600*1e-6 # 27 ppmw of total planet mass of Venus lies in atmosphere (google), 600 ppmw total estimated from Anders2021 or AnatomyIII. 
-fN = 10**0.5*1e-6 # mass fraction of total planet mass of Venus in atmosphere, from same figure in AnatomyIII
-fH = fH2O*2/18 # 2 of the 18 amu in H2O is from the hydrogen
-fFeO = 0.3*(55.845+16)/55.845 # PLACEHOLDER DOES THIS EVEN MAKE SENSE. 30% of bulk mass is metal. 
-fO = fH2O*16/18+fFeO*16/(55.845+16)# SUPER PLACEHOLDER. 16 out of the 18 mass units in H2O are accounted for by the oxygen atom. Also some from the FeO
-fi = np.array([fH, fC, fN, fO]) # array to store the volatiles in.
+XH2O = 2e3*1e-6 # 2e3 ppmw, AnatomyIII
+XC = 600*1e-6 # 600 ppmw total estimated from Anders2021 or AnatomyIII. 27 ppmw of total planet mass of Venus lies in atmosphere (google) 
+XN = 10**0.5*1e-6 # mass fraction of total planet mass of Venus in atmosphere, from same figure in AnatomyIII
+XH = XH2O*2/18 # PLACEHOLDER DOES THIS EVEN MAKE SENSE, 2 of the 18 amu in H2O is from the hydrogen
+XFeO = 0.3*(55.845+16)/55.845 # PLACEHOLDER DOES THIS EVEN MAKE SENSE. 30% of bulk mass is metal. 
+Xi = np.array([XH2O, XC, XN]) # array to store the volatiles in.
 
 # initial masses each volatile element in the silicate melt
-MH2O = fH2O*Mtot
-MC = fC*Mtot
-MN = fN*Mtot
+MH2O = XH2O*Msil
+MC = XC*Msil
+MN = XN*Msil
 Mvol = np.array([MH2O, MC, MN])
+Mtot = Msil+MH2O+MC+MN
 
-# initial mole fraction of volatiles in atmosphere, X
-molefracH2O = 20e-6 # 20 ppm, Venus' current atmosphere
-molefracCO2 = 0.965-molefracH2O*1/2 # 96.5%, Venus' current atmosphere 
-molefracN = 0.035-molefracH2O*1/2 # 3.5%, Venus' current atmosphere
+# Matm - mass of the atmosphere
+# Miatm0 - starting masses of each volatile species in the atmosphere
+# Misil0 - starting masses of each volatile species in the top layer of the magma ocean (silicate melt)
+# Mitot0 - starting masses of each volatile species in either the atmosphere of top layer of the magma ocean
+# AMUi - atomic mass units of volatile species i
+# alphai - vector for the powers for the dissolution law of the volatile species i's dissolution into the magma ocean
+# Ki - equilibrium constants for the dissolution reactions
+# Msilmet - silicate + metal mass in top layer of magma ocean 
+# Xiktop - mass fraction of volatiles in the top layer of the magma ocean
 
-# partial pressures of volatiles in the atmosphere
-ppH2O = molefracH2O*psurf
-ppCO2 = molefracCO2*psurf
-ppN = molefracN*psurf
+# returns masses of each volatile in the first atmosphere to be in equilibrium with the assumed starting volatile fraction in the silicate melt of the top layer of the magma ocean
+def startingatmosphere(Matm, Xiktop, AMUi, alphai, Ki):
+    frac = Xiktop**alphai*AMUi/Ki
+    Miatm0 = frac/np.sum(frac)*Matm
+    return Miatm0
+
+# Possibly useful. calculates the Ki corresponding to if the non-equilbriated dissolution was in fact an equilibrium
+def Kinoneq(Xiktop, Miatm0, AMUi, alphai): 
+    frac = Miatm0/AMUi
+    return Xiktop**alphai/(frac/np.sum(frac))
+
+# # input needs to be arrays, sensitive to actual values of input parameters (must be fairly close to equilibrium already) be careful
+# def legacyMiatmeqfunc(Miatm0, AMUi, alphai, Ki, Msilmet, Misil0, method='fsolve'): # function to find the dissolution equilbrium solution of the mass of volatile species in the atmosphere 
+#     Mitot0 = Miatm0+Misil0 # sum of volatiles in either reservoir before equilibriation
+#     def Miatmrootfunc(Miatm): # function of Miatm that evaluates to 0 at chemical dissolution equilbrium between top layer of magma ocean and the atmosphere
+#         Mtot0 = Msilmet+np.sum(Mitot0) # total mass of the top layer before equilibriation
+#         frac = Miatm/AMUi
+#         # return Miatm+(Ki*frac/np.sum(frac))**(1/alphai)*(Mtot0-np.sum(Miatm))-Mitot0
+#         return 1/Mitot0*(Miatm+(Ki*frac/np.sum(frac))**(1/alphai)*(Mtot0-np.sum(Miatm)))-1 # better to solve for the unitless equation = 0
+#     if method=='fsolve': # appears to be stably solver further from equilibrium starting guesses
+#         Miatmeq = fsolve(Miatmrootfunc, Miatm0) # find roots to the function with a starting guess being the unequilibrated atmospheric mass of the volatile species.
+#     else:
+#         Miatmeq = broyden1(Miatmrootfunc, Miatm0, f_tol=1e-8) # use Broyden's good method instead
+#     print(np.isclose(Miatmrootfunc(Miatmeq), np.zeros_like(Miatmeq))) # check if roots are valid
+    
+#     Misileq = Mitot0-Miatmeq # mass of volatile in magma ocean = total volatile mass minus volatile mass in atmosphere
+#     Xiktop = massfraction(Misileq, Msilmet) # mass fraction of volatile in top layer of magma ocean
+#     return Miatmeq, Misileq, Xiktop, Miatmeq/Miatm0
+
+
+# input needs to be arrays, sensitive to actual values of input parameters (must be fairly close to equilibrium already) be careful
+def Miatmeqfunc(Miatm0, AMUi, alphai, betai, Ki, Msiltop, Misil0, method='fsolve'): # function to find the dissolution equilbrium solution of the mass of volatile species in the atmosphere 
+    Mitot0 = Miatm0+Misil0 # sum of volatiles in either reservoir before equilibriation
+    def Miatmrootfunc(Miatm): # function of Miatm that evaluates to 0 at chemical dissolution equilbrium between top layer of magma ocean and the atmosphere
+        frac = Miatm/AMUi
+        return 1/Mitot0*(Miatm+(Ki*frac/np.sum(frac))**(1/alphai)*betai*Msiltop)-1 # better to solve for the unitless equation = 0
+    if method=='fsolve': # appears to be stably solver further from equilibrium starting guesses
+        Miatmeq = fsolve(Miatmrootfunc, Miatm0) # find roots to the function with a starting guess being the unequilibrated atmospheric mass of the volatile species.
+    else:
+        Miatmeq = broyden1(Miatmrootfunc, Miatm0, f_tol=1e-8) # use Broyden's good method instead
+    print(np.isclose(Miatmrootfunc(Miatmeq), np.zeros_like(Miatmeq))) # check if roots are valid
+    
+    Misileq = Mitot0-Miatmeq # mass of volatile in magma ocean = total volatile mass minus volatile mass in atmosphere
+    Xiktop = massfraction(Misileq, Msiltop) # mass fraction of volatile in top layer of magma ocean
+    return Miatmeq, Misileq, Xiktop, Miatmeq/Miatm0
+
+
+Miatmstart = startingatmosphere(Matm, (Mvol[:,-1]/Mtot[-1])/betai, amui, alphai, Ki)
+
+
+#-------------------convection (diffusion) and sedimentation-------------------
 
 # estimate initial partition coefficients using bulk mass fractions globally
 if evendist: 
     PH2O, CH2Omet = iterativePH2O(pressure, MH2O, Msil)
     PC = PCfunc(pressure, temperature, 0)
-    PN = PNfunc(pressure, temperature, fFeO)
+    PN = PNfunc(pressure, temperature, XFeO)
     Pvol = np.array([PH2O, PC, PN]) # array of all the volatile species' partition coefficients (at all magma ocean layers)
     
     plt.figure()
@@ -583,53 +684,4 @@ if evendist:
     # plt.ylabel('Water fraction inside metal droplets')
     # plt.xlabel('radius [km]')
 
-
-#------------------------------Transport functions-----------------------------
-
-def massfraction(partialmasses, layermasses): # computes mass fraction of a mass compared to the total
-    return partialmasses/(layermasses+np.sum(partialmasses, 0))
-
-
-#-------------------convection (diffusion) and sedimentation-------------------
-
-
-
-#----------------atmosphere & magma ocean top layer interaction----------------
-# Matm - mass of the atmosphere
-# Miatm0 - starting masses of each volatile species in the atmosphere
-# Misil0 - starting masses of each volatile species in the top layer of the magma ocean (silicate melt)
-# Mitot0 - starting masses of each volatile species in either the atmosphere of top layer of the magma ocean
-# AMUi - atomic mass units of volatile species i
-# alphai - vector for the powers for the dissolution law of the volatile species i's dissolution into the magma ocean
-# Ki - equilibrium constants for the dissolution reactions
-# Msilmet - silicate + metal mass in top layer of magma ocean 
-# Xiktop - mass fraction of volatiles in the top layer of the magma ocean
-
-# returns masses of each volatile in the first atmosphere to be in equilibrium with the assumed starting volatile fraction in the silicate melt of the top layer of the magma ocean
-def startingatmosphere(Matm, Xiktop, AMUi, alphai, Ki):
-    frac = Xiktop**alphai*AMUi/Ki
-    Miatm0 = frac/np.sum(frac)*Matm
-    return Miatm0
-
-def Kinoneq(Xiktop, Miatm0, AMUi, alphai): # calculates the Ki corresponding to if the non-equilbriated dissolution was in fact an equilibrium
-    frac = Miatm0/AMUi
-    return Xiktop**alphai/(frac/np.sum(frac))
-
-# sensitive to degree of input arrays, (and actual values of input parameters) be careful
-def Miatmeqfunc(Miatm0, AMUi, alphai, Ki, Msilmet, Misil0, method='fsolve'): # function to find the dissolution equilbrium solution of the mass of volatile species in the atmosphere 
-    Mitot0 = Miatm0+Misil0 # sum of volatiles in either reservoir before equilibriation
-    def Miatmrootfunc(Miatm): # function of Miatm that evaluates to 0 at chemical dissolution equilbrium between top layer of magma ocean and the atmosphere
-        Mtot0 = Msilmet+np.sum(Mitot0) # total mass of the top layer before equilibriation
-        frac = Miatm/AMUi
-        # return Miatm+(Ki*frac/np.sum(frac))**(1/alphai)*(Mtot0-np.sum(Miatm))-Mitot0
-        return 1/Mitot0*(Miatm+(Ki*frac/np.sum(frac))**(1/alphai)*(Mtot0-np.sum(Miatm)))-1 # better to solve for the unitless equation = 0
-    if method=='fsolve': # appears to be stably solver further from equilibrium starting guesses
-        Miatmeq = fsolve(Miatmrootfunc, Miatm0) # find roots to the function with a starting guess being the unequilibrated atmospheric mass of the volatile species.
-    else:
-        Miatmeq = broyden1(Miatmrootfunc, Miatm0, f_tol=1e-8) # use Broyden's good method instead
-    print(np.isclose(Miatmrootfunc(Miatmeq), np.zeros_like(Miatmeq))) # check if roots are valid
-    
-    Misileq = Mitot0-Miatmeq # mass of volatile in magma ocean = total volatile mass minus volatile mass in atmosphere
-    Xiktop = massfraction(Misileq, Msilmet) # mass fraction of volatile in top layer of magma ocean
-    return Miatmeq, Misileq, Xiktop, Miatmeq/Miatm0
 
