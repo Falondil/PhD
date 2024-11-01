@@ -35,6 +35,7 @@ structureplotting = True # should the iterative steps to find the internal struc
 number_of_structure_boundaries = int(1e4)
 number_of_structure_iterations = 10
 structureplotstepspacing = 1  # number_of_structure_timesteps
+restructuringspacing = 10
 
 # -------------------------------General functions-----------------------------
 def delta(array):  # calculates the forward difference to the next element in array. returns array with one less element than input array
@@ -91,10 +92,10 @@ if fixedplanetmass:
 else:
     rsurf0 = 6371  # km, initial planet radius
     
-if fullformationtime: # rewrite simulatedtime to the time for the formation of the specified protoplanet's mass
-    simulatedtime = protomass/pebblerate # year 
+if fullformationtime: # rewrite simulationtime to the time for the formation of the specified protoplanet's mass
+    simulationtime = protomass/pebblerate # year 
 else:
-    simulatedtime = 1e3 # yr
+    simulationtime = 1e2 # yr
         
 # compression and expansion values
 alpha0 = 3e-5  # volumetric thermal expansion coefficient, K-1
@@ -272,7 +273,6 @@ def accretionluminositysingle(accretedmassrate, rlimit, rvar, drvar, Menc):
     
     MOterm = accretedmassrate*G*np.sum(np.where(centeraveraging(rvar)>rlimit, centeraveraging(Menc/rvar**2)*drvar, 0)) # integrates between rlimit and rsurf
     Lmet = surfaceterm+MOterm  # total luminosity is the sum
-    print(str(surfaceterm), str(MOterm))
     return Lmet
 
 
@@ -370,7 +370,7 @@ def restructuring(r, M, Matm, pebblerate = pebblerate, number_of_structure_bound
     temperature = topdownadiabat(rvar, drvar, pressure, Menc, Tsurf) # calculates temperature
     
     for j in range(iterations):
-        density = densityfunc(pressure, temperature, initialdensity[-1])
+        density = densityfunc(pressure, temperature) # implicit 
         rvar = newlayerboundaries(layermasses, density)
         drvar = delta(rvar)    
 
@@ -381,7 +381,7 @@ def restructuring(r, M, Matm, pebblerate = pebblerate, number_of_structure_bound
         pressure = pressurefunc(rvar, drvar, density, Menc, psurf)
         temperature, adiabattemperature, Ra = temperaturefunc(rvar, drvar, rmiddle, pressure, temperature, density, Menc, Tsurf, Lmet, heatconductivity, True)
         
-        if (j % structureplotstepspacing == 0 or j == number_of_structure_iterations-1) and structureplotting:
+        if (j % structureplotstepspacing == 0 or j == number_of_structure_iterations-1) and plotting:
             fig, (ax1, ax2) = plt.subplots(1, 2)
             Mtotstr = str(np.round(Menc[-1]))
             fig.suptitle('Structure of magma ocean after '+str(j+1) +
@@ -444,17 +444,13 @@ initialdensity = initialMtot/initialvolumes
 # compressed structure
 rk, psurf, Tsurf, pressure, temperature, density, D, compressioncalctime = restructuringfromdensity(rk, initialdensity, Matm0, pebblerate, number_of_structure_boundaries, number_of_structure_iterations, True)
 dr = rk[1]-rk[0] # same layerwidth for all layers
+rsurf = rk[-1]  # new surface is the compressed surface
 layercenters = centeraveraging(rk)
 layervolumes = volumefunc(rk) # calculate volume of each magma ocean layer 
 Mmet = pebblerate*pebblemetalfrac*dr/vmet # metal inside each layer, LET PEBBLERATE CHANGE?
 Msilmet = density*layervolumes # compressed density*volume is total mass of metal + silicates
 Msil = Msilmet-Mmet # subtract mass of metal to get mass of silicates in each magma ocean layer 
-# uncompressed for plotting comparison 
-Msilunc = silicatedensity*layervolumes
-Mencsilunc = menc(Msilunc)[:-1]  # uncompressed enclosed silicate mass
 
-rsurf = rk[-1]  # new surface is the compressed surface
-magmadepth = rsurf-rcore # km
 
 #------------------------------Volatile Transport------------------------------
 def massfraction(partialmasses, layermasses): # computes mass fraction of a mass compared to the total
@@ -549,11 +545,11 @@ def Kinoneq(Xiktop, Miatm0, AMUi, alphai):
 
 
 # input needs to be arrays, sensitive to actual values of input parameters (must be fairly close to equilibrium already) be careful
-def Miatmeqfunc(Miatm0, AMUi, alphai, Msiltop, Misil0, method='fsolve'): # function to find the dissolution equilbrium solution of the mass of volatile species in the atmosphere 
+def Miatmeqfunc(Miatm0, rsurf, AMUi, alphai, Msiltop, Misil0, method='fsolve'): # function to find the dissolution equilbrium solution of the mass of volatile species in the atmosphere 
     Mitot0 = Miatm0+Misil0 # sum of volatiles in either reservoir before equilibriation
     def Miatmrootfunc(Miatm): # function of Miatm that evaluates to 0 at physical+chemical dissolution equilbrium between top layer of magma ocean and the atmosphere
         frac = Miatm/AMUi
-        Ki = Kifunc(np.sum(Miatm)) # calculate the equilibrium constants from pressure (or Matm)
+        Ki = Kifunc(np.sum(Miatm), rsurf) # calculate the equilibrium constants from pressure (or Matm)
         return 1/Mitot0*(Miatm+(Ki*frac/np.sum(frac))**(1/alphai)*Msiltop-Mitot0) # better to solve for the unitless equation = 0
     # def derivativefunc(Miatm): 
         # quit # write fprime = derivativefunc as argument to fsolve
@@ -571,7 +567,7 @@ def Miatmeqfunc(Miatm0, AMUi, alphai, Msiltop, Misil0, method='fsolve'): # funct
 
 
 Miatmstart = startingatmosphere(Matm0, Mvol0[:,-1]/Msilvol[-1], amui, alphai)
-eqstate = Miatmeqfunc(Miatmstart, amui, alphai, Msil[-1], Mvol0[:,-1]) # state of mass conservation and dissolution equilibrium
+eqstate = Miatmeqfunc(Miatmstart, rsurf, amui, alphai, Msil[-1], Mvol0[:,-1]) # state of mass conservation and dissolution equilibrium
 Miatm = eqstate[0]
 Matm = np.sum(eqstate[0])
 print(Matm/np.sum(Miatmstart))
@@ -661,7 +657,7 @@ plt.ylabel('Temperature [K]')
 
 # estimate initial partition coefficients using bulk mass fractions globally
 if evendist: 
-    PH2O, CH2Omet = iterativePH2O(pressure, MH2O, Msil)
+    PH2O, CH2Omet = iterativePH2O(pressure, Mvol0[0], Msil)
     PC = PCfunc(pressure, temperature, 0)
     PN = PNfunc(pressure, temperature, XFeO)
     Pvol = np.array([PH2O, PC, PN]) # array of all the volatile species' partition coefficients (at all magma ocean layers)
@@ -693,10 +689,10 @@ if evendist:
 #----------------------------------Transport-----------------------------------
 stdmax = cspread*dr # km
 dt = stdmax**2/(2*D) # diffusivity (calculated during restructuring step as enhanced conductivity to model convectivity) limits the timestep since volatile flux only goes to neighboring magma ocean layers
-number_of_timesteps = int(simulatedtime/dt)  # compute the number of timesteps
+number_of_timesteps = int(simulationtime/dt)  # compute the number of timesteps
 plotstepspacing = max(plotstepspacing, int(number_of_timesteps/max_number_of_plots))
 
-def tridiagsolver(rk, Mvol0, Msil, Mmet, vmet, D, Pvol, dt=dt, diagnosticreturn = False): # solves tri-diagonal matrix for volatile motion to neighboring layers of magma ocean via sedimentation and convection (modelled as enhanced diffusion) 
+def tridiagsolver(rk, Mvol0, Msil, Mmet, vmet, D, Pvol, dt=dt): # solves tri-diagonal matrix for volatile motion to neighboring layers of magma ocean via sedimentation and convection (modelled as enhanced diffusion) 
     dr = rk[1]-rk[0] # constant layer width
     rhosil = centeraveraging(Msil/volumefunc(rk)) # calculate density of silicate AT layer boundaries
     
@@ -712,10 +708,16 @@ def tridiagsolver(rk, Mvol0, Msil, Mmet, vmet, D, Pvol, dt=dt, diagnosticreturn 
     
     
     Sik = Mvol0/(Msil+Pvol*Mmet) 
-    diagnostic = np.zeros_like(Mvol0) 
-    diagnostic[:,1:-1] = 4*pi*D*rhosil[:-1]*(rk[2:-1]**2*(Sik[:,2:]-Sik[:,1:-1])+rk[1:-2]**2*(Sik[:,:-2]-Sik[:,1:-1]))/(vmet*Mmet*(Sik[:,2:]*Pvol[:,2:]-Sik[:,1:-1]*Pvol[:,1:-1]))
-    diagnostic[:,0] = 4*pi*D*rhosil[0]*rk[1]**2*(Sik[:,1]-Sik[:,0])/(vmet*Mmet*(Sik[:,1]*Pvol[:,1]-Sik[:,0]*Pvol[:,0]))
-    diagnostic[:,-1] = 4*pi*D*rhosil[-1]*rk[-2]**2*(Sik[:,-2]-Sik[:,-1])/(-vmet*Mmet*Sik[:,-1]*Pvol[:,-1])
+    
+    conv = np.zeros_like(Mvol0) 
+    conv[:,1:-1] = 4*pi*D*rhosil[:-1]*rk[2:-1]**2*(Sik[:,2:]-Sik[:,1:-1])+rk[1:-2]**2*(Sik[:,:-2]-Sik[:,1:-1])
+    conv[:,0] = 4*pi*D*rhosil[0]*rk[1]**2*(Sik[:,1]-Sik[:,0])
+    conv[:,-1] = 4*pi*D*rhosil[-1]*rk[-2]**2*(Sik[:,-2]-Sik[:,-1])
+    
+    sedi = np.ones_like(Mvol0)/(dr*(Msil+Pvol*Mmet))
+    sedi[:,1:-1] *= vmet*Mmet*(Sik[:,2:]*Pvol[:,2:]-Sik[:,1:-1]*Pvol[:,1:-1])
+    sedi[:,0] *= vmet*Mmet*(Sik[:,1]*Pvol[:,1]-Sik[:,0]*Pvol[:,0])
+    sedi[:,-1] *= -vmet*Mmet*Sik[:,-1]*Pvol[:,-1]
 
     A = np.zeros_like(volatiles, dtype=object)
     Mvol = np.zeros_like(Mvol0)
@@ -724,13 +726,11 @@ def tridiagsolver(rk, Mvol0, Msil, Mmet, vmet, D, Pvol, dt=dt, diagnosticreturn 
         eigval, eigvec = eig(A[i]) # print(np.linalg.cond(eigvec)) # < 1e15 is good
         Cs = np.linalg.solve(eigvec, Mvol0[i]) # find coefficients to match expression of Mvol(t) to known Mvol0 = Mvol(0)
         Mvol[i,:] = np.real((Cs*np.exp(eigval*dt))@eigvec.transpose())
-    if diagnosticreturn:
-        return Mvol, diagnostic
-    else:
-        return Mvol
+    return Mvol, conv, sedi
+    
 
 # Check that the solver is working:
-# Mvol, diagnostic = tridiagsolver(rk, Mvol0, Msil, Mmet, vmet, D, Pvol, dt, True)
+# Mvol, conv, sedi = tridiagsolver(rk, Mvol0, Msil, Mmet, vmet, D, Pvol, dt, True)
 # plt.figure()
 # for i in range(len(volatiles)):
 #     plt.plot(layercenters, (Mvol[i]-Mvol0[i])/Mvol0[i], '.', color=vcolors[i], label=volatiles[i])
@@ -742,46 +742,95 @@ def tridiagsolver(rk, Mvol0, Msil, Mmet, vmet, D, Pvol, dt=dt, diagnosticreturn 
 # %% Transport loop
 Mvol = np.copy(Mvol0) # time step variable
 loopstart = time.time()
+simulatedyears = 0
 for timestep in range(number_of_timesteps):
-    diagnosticreturn = True
-    Mvol, diagnostic = tridiagsolver(rk, Mvol, Msil, Mmet, vmet, D, Pvol, dt, diagnosticreturn)
+    dt = stdmax**2/(2*D) # update dt as D changes
+    simulatedyears += dt # add dt to the simulated time 
+
+    # volatile motion inside magma ocean
+    Mvol, conv, sedi = tridiagsolver(rk, Mvol, Msil, Mmet, vmet, D, Pvol, dt)
     Mtot = Msil+Mmet+np.sum(Mvol, axis=0)
     
-    eqstate = Miatmeqfunc(Miatm, amui, alphai, Msil[-1], Mvol[:,-1])
+    # magma ocean - atmosphere boundary interaction
+    eqstate = Miatmeqfunc(Miatm, rsurf, amui, alphai, Msil[-1], Mvol[:,-1])
     Miatm = eqstate[0]
     Mvol[:,-1] = eqstate[1] # update magma ocean top layer's volatile content
     Matm = np.sum(eqstate[0])
     
+    # magma ocean restructuring
+    if timestep % restructuringspacing == 0 or timestep == number_of_timesteps-1:
+        rk, psurf, Tsurf, pressure, temperature, density, D, compressioncalctime = restructuringfromdensity(rk, density, Matm, pebblerate, number_of_structure_boundaries, 1, False)
+        dr = rk[1]-rk[0] # same layerwidth for all layers
+        rsurf = rk[-1]  # new surface is the compressed surface
+        layercenters = centeraveraging(rk)
+        layervolumes = volumefunc(rk) # calculate volume of each magma ocean layer 
+        Mmet = pebblerate*pebblemetalfrac*dr/vmet # metal inside each layer, LET PEBBLERATE CHANGE?
+        Msilmet = density*layervolumes # compressed density*volume is total mass of metal + silicates
+        Msil = Msilmet-Mmet # subtract mass of metal to get mass of silicates in each magma ocean layer 
+    
     if timestep % plotstepspacing == 0 or timestep == number_of_timesteps-1:
         volfrac = Mvol/Mtot # only calculate volatile mass fraction if it is plotted
+        diagnostic = conv/sedi # -||-
         
-        fig, (ax1, ax2) = plt.subplots(1,2)
-        fig.suptitle('Time step '+str(timestep+1)+', '+"{:.1f}".format(
-            (timestep+1)*dt)+' years', y=1.05)
+        fig, axs = plt.subplots(2,2, figsize=(7,7))
+        plt.subplots_adjust(left=0,
+                    bottom=0.1, 
+                    right=1, 
+                    top=0.95, 
+                    wspace=0.3, 
+                    hspace=0.3)
+        ax1, ax2, ax3, ax4 = axs[0,0], axs[0,1], axs[1,0], axs[1,1]
+        fig.suptitle('Time step '+str(timestep+1)+', '+"{:.1f}".format(simulatedyears)+' years', y=1.05)
         for i in range(len(volatiles)):
             ax1.semilogy(layercenters, Mvol0[i]/Mtot0, color=vcolors[i], label=volatiles[i])
             ax1.semilogy(layercenters, volfrac[i], '.', color=vcolors[i])
             ax1.set_title("Volatile distribution" "\n" "in magma ocean")
             ax1.set_xlabel('radius [km]')
             ax1.set_ylabel('Volatile mass fraction')
-            ax1.legend(loc='best')
             ax1.grid()
+            # ax1.set_box_aspect()
             
-        if diagnosticreturn:
-            for i in range(len(volatiles)):
-                ax2.semilogy(layercenters, diagnostic[i], color=vcolors[i])
-                ax2.semilogy(layercenters, -diagnostic[i], linestyle=(0, (5, 5)), color=vcolors[i])
-                ax2.set_title("Relative strength of"
-                              "\n" 
-                              "convection and sedimentation")
-                ax2.set_xlabel('radius [km]')
-                ax2.set_ylabel('Net convection/net sedimentation')
-                ax2.grid()
-                # ax2.yaxis.set_label_position('right')
-                ax2.yaxis.set_ticks_position('right')
+        for i in range(len(volatiles)):
+            ax2.semilogy(layercenters, diagnostic[i], color=vcolors[i])
+            ax2.semilogy(layercenters, -diagnostic[i], linestyle=(0, (5, 5)), color=vcolors[i])
+            ax2.set_title("Relative strength of"
+                          "\n" 
+                          "convection and sedimentation")
+            ax2.set_xlabel('radius [km]')
+            ax2.set_ylabel("Convective flux / Sedimentation flux")
+            ax2.grid()
+            # ax2.yaxis.set_label_position('right')
+            ax2.yaxis.set_ticks_position('right')
+            # ax2.set_box_aspect()
+
+            
+        for i in range(len(volatiles)):
+            ax3.semilogy(layercenters, conv[i], color=vcolors[i])
+            ax3.semilogy(layercenters, -conv[i], linestyle=(0, (5, 5)), color=vcolors[i])
+            ax3.set_title("Volatile convection")
+            ax3.set_xlabel('radius [km]')
+            ax3.set_ylabel("Convective flux"+"\n"+"[Pg/year]")
+            ax3.grid()
+            # ax3.yaxis.set_label_position('right')
+            ax3.yaxis.set_ticks_position('right')
+            # ax3.set_box_aspect()
+
+            
+        for i in range(len(volatiles)):
+            ax4.semilogy(layercenters, sedi[i], color=vcolors[i])
+            ax4.semilogy(layercenters, -sedi[i], linestyle=(0, (5, 5)), color=vcolors[i])
+            ax4.set_title("Volatile sedimentation")
+            ax4.set_xlabel('radius [km]')
+            ax4.set_ylabel("Sedimentation flux"+"\n"+"[Pg/year]")
+            ax4.grid()
+            # ax4.yaxis.set_label_position('right')
+            ax4.yaxis.set_ticks_position('right')
+            # ax4.set_box_aspect()
+
         
-    print('Time step '+str(timestep+1)+'/'+str(number_of_timesteps)+' completed')
+        
+    print('Time step '+str(timestep+1)+'/'+str(number_of_timesteps)+' completed. t = '+"{:.1f}".format(simulatedyears)+' years.')
     
 loopend = time.time()
 looptimeelapsed = loopend-loopstart
-simulationspeed = simulatedtime/looptimeelapsed # 3.7 years/second over 1e5 timesteps
+simulationspeed = simulatedyears/looptimeelapsed # 3.7 years/second over 1e5 timesteps with only internal magma ocean motion, no surface interaction or restructuring. 
