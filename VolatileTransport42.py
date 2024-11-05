@@ -35,7 +35,7 @@ number_of_structure_iterations = 10
 structureplotstepspacing = 1  # number_of_structure_timesteps
 restructuringspacing = 10
 
-settime = 1e4 # years
+settime = 5e4 # years
 
 # -------------------------------General functions-----------------------------
 def delta(array):  # calculates the forward difference to the next element in array. returns array with one less element than input array
@@ -111,7 +111,7 @@ Mearthatm = 5.15e6  # Pg, current mass of Earth's atmosphere
 Mvenusatm = 4.8e8 # Pg
 Matmlow = Mearthatm*protomass/earthmass  # Pg, mass of the atmosphere of the protoplanet modelled
 Matmhigh = Mvenusatm*protomass/venusmass
-Matm0 = Matmhigh # CHOICE, should it be? 
+Matmguess = Matmhigh # CHOICE, should it be? 
 opacitypho = 1e-3*1e6  # (gray) Rosseland mean opacity from Badescu2010. 1e6 factor for conversion from m^2 kg^-1 to km^2 Pg^-1, PLACEHOLDER
 def opacityfunc(p, T): # scaling from Rogers2024. pressure input in GPa
     pinbar = p*GPatobar
@@ -156,7 +156,7 @@ def psurffunc(Matm, rsurf, protomass=protomass):
 
 
 # calculates the surface temperature assuming an adiabatic temperature profile from the photosphere down to the surface
-def pTsurf(rsurf, Matm=Matm0, pebblerate=pebblerate, protomass=protomass, opacitypho=opacitypho, gamma=atmgamma):
+def pTsurf(rsurf, Matm=Matmguess, pebblerate=pebblerate, protomass=protomass, opacitypho=opacitypho, gamma=atmgamma):
     gsurf = G*protomass/rsurf**2
     Ltot = pebblerate*G*protomass/rsurf #+accretionluminositysingle(pebblerate*pebblemetalfrac, rs, drs, Menc0) # full pebble luminosity 
     psurf = gsurf*Matm/(4*pi*rsurf**2)*GPaconversion # GPa, pressure at surface
@@ -440,7 +440,7 @@ initialMtot = initialMmet+initialvolumes*silicatedensity
 initialdensity = initialMtot/initialvolumes
 
 # compressed structure
-rk, psurf, Tsurf, pressure, temperature, density, D, compressioncalctime = restructuringfromdensity(rk, initialdensity, Matm0, pebblerate, number_of_structure_boundaries, number_of_structure_iterations, True)
+rk, psurf, Tsurf, pressure, temperature, density, D, compressioncalctime = restructuringfromdensity(rk, initialdensity, Matmguess, pebblerate, number_of_structure_boundaries, number_of_structure_iterations, True)
 dr = rk[1]-rk[0] # same layerwidth for all layers
 rsurf = rk[-1]  # new surface is the compressed surface
 layercenters = centeraveraging(rk)
@@ -551,7 +551,7 @@ def Miatmeqfunc(Miatm0, rsurf, AMUi, alphai, Msiltop, Misil0, method='fsolve'): 
         return 1/Mitot0*(Miatm+(Ki*frac/np.sum(frac))**(1/alphai)*Msiltop-Mitot0) # better to solve for the unitless equation = 0
     # def derivativefunc(Miatm): 
         # quit # write fprime = derivativefunc as argument to fsolve
-    if method=='fsolve': # appears to be stably solver further from equilibrium starting guesses
+    if method=='fsolve': # appears to be stably solving further-from-equilibrium starting guesses
         Miatmeq = fsolve(Miatmrootfunc, Miatm0) # find roots to the function with a starting guess being the unequilibrated atmospheric mass of the volatile species.
     else:
         Miatmeq = broyden1(Miatmrootfunc, Miatm0, f_tol=1e-8) # use Broyden's good method instead
@@ -564,11 +564,11 @@ def Miatmeqfunc(Miatm0, rsurf, AMUi, alphai, Msiltop, Misil0, method='fsolve'): 
     return Miatmeq, Misileq, meltmassfraci, atmmassfraci, psurf, Miatmeq/Miatm0
 
 
-Miatmstart = startingatmosphere(Matm0, Mvol0[:,-1]/Msilvol[-1], amui, alphai)
-eqstate = Miatmeqfunc(Miatmstart, rsurf, amui, alphai, Msil[-1], Mvol0[:,-1]) # state of mass conservation and dissolution equilibrium
-Miatm = eqstate[0]
-Matm = np.sum(eqstate[0])
-print(Matm/np.sum(Miatmstart))
+Miatmguess = startingatmosphere(Matmguess, Mvol0[:,-1]/Msilvol[-1], amui, alphai)
+eqstate = Miatmeqfunc(Miatmguess, rsurf, amui, alphai, Msil[-1], Mvol0[:,-1]) # state of mass conservation and dissolution equilibrium
+Miatm0 = eqstate[0]
+Matm0 = np.sum(Miatm0)
+print(Matm0/np.sum(Miatmguess))
 
 
 #-------------------convection (diffusion) and sedimentation-------------------
@@ -704,7 +704,6 @@ def tridiagsolver(rk, Mvol0, Msil, Mmet, vmet, D, Pvol, dt=dt): # solves tri-dia
     toplayerloss = (-4*pi*D*rhosil[-1]*rk[-2]**2-vmet*Pvol[:,-1]*Mmet)/(dr*(Msil[-1]+Pvol[:,-1]*Mmet))
     diag = np.array([np.append(np.concatenate(([bottomlayerloss[i]], ownlayer[i])), toplayerloss[i]) for i in irange]) # elements on the diagonal of the matrix A where dM_ik/dt = A M_ik for any volatile i. 
     
-    
     Sik = Mvol0/(Msil+Pvol*Mmet) 
     
     conv = np.ones_like(Mvol0)/(dr*(Msil+Pvol*Mmet))
@@ -724,30 +723,34 @@ def tridiagsolver(rk, Mvol0, Msil, Mmet, vmet, D, Pvol, dt=dt): # solves tri-dia
         eigval, eigvec = eig(A[i]) # print(np.linalg.cond(eigvec)) # < 1e15 is good
         Cs = np.linalg.solve(eigvec, Mvol0[i]) # find coefficients to match expression of Mvol(t) to known Mvol0 = Mvol(0)
         Mvol[i,:] = np.real((Cs*np.exp(eigval*dt))@eigvec.transpose())
-    return Mvol, conv, sedi
+    coreloss = np.sum(Mvol, axis=1)-np.sum(Mvol0, axis=1) # calculates how much mass has gone into the core
+    return Mvol, conv, sedi, coreloss
     
 
 # Check that the solver is working:
-# Mvol, conv, sedi = tridiagsolver(rk, Mvol0, Msil, Mmet, vmet, D, Pvol, dt, True)
-# plt.figure()
-# for i in irange):
-#     plt.plot(layercenters, (Mvol[i]-Mvol0[i])/Mvol0[i], '.', color=vcolors[i], label=volatiles[i])
-# plt.title('Volatile mass change in magma ocean')
-# plt.xlabel('radius [km]')
-# plt.ylabel('Change relative to previous volatile layer mass')
-# plt.legend(loc='best')
+Mvol, conv, sedi, coremass = tridiagsolver(rk, Mvol0, Msil, Mmet, vmet, D, Pvol, dt, True)
+plt.figure()
+for i in irange:
+    plt.plot(layercenters, (Mvol[i]-Mvol0[i])/Mvol0[i], '.', color=vcolors[i], label=volatiles[i])
+plt.title('Volatile mass change in magma ocean')
+plt.xlabel('radius [km]')
+plt.ylabel('Change relative to previous volatile layer mass')
+plt.legend(loc='best')
 
 # %% Transport loop
 Mvol = np.copy(Mvol0) # time step variable
+Miatm = np.copy(Miatm0)
 loopstart = time.time()
 simulatedyears = 0
+totalcoreloss = 0 # how much of each volatile has been lost to the core
 for timestep in range(number_of_timesteps):
     dt = stdmax**2/(2*D) # update dt as D changes
     simulatedyears += dt # add dt to the simulated time 
 
     # volatile motion inside magma ocean
-    Mvol, conv, sedi = tridiagsolver(rk, Mvol, Msil, Mmet, vmet, D, Pvol, dt)
+    Mvol, conv, sedi, coreloss = tridiagsolver(rk, Mvol, Msil, Mmet, vmet, D, Pvol, dt)
     Mtot = Msil+Mmet+np.sum(Mvol, axis=0)
+    totalcoreloss += coreloss
     
     # magma ocean - atmosphere boundary interaction
     eqstate = Miatmeqfunc(Miatm, rsurf, amui, alphai, Msil[-1], Mvol[:,-1])
@@ -837,4 +840,4 @@ for timestep in range(number_of_timesteps):
     
 loopend = time.time()
 looptimeelapsed = loopend-loopstart
-simulationspeed = simulatedyears/looptimeelapsed # 3.7 years/second over 1e5 timesteps with only internal magma ocean motion, no surface interaction or restructuring. Half-speed with more 
+simulationspeed = simulatedyears/looptimeelapsed # 3.7 years/second over 1e5 timesteps with only internal magma ocean motion, no surface interaction or restructuring. Half-speed (1.8) with restructuring + surface interaction. Approaches 2 for bigger number of time steps (5e5)
