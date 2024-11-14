@@ -35,7 +35,7 @@ number_of_structure_iterations = 10
 structureplotstepspacing = 1  # number_of_structure_timesteps
 restructuringspacing = 10
 
-settime = 5e4 # years
+settime = 1e3 # years
 
 # -------------------------------General functions-----------------------------
 def delta(array):  # calculates the forward difference to the next element in array. returns array with one less element than input array
@@ -342,7 +342,7 @@ def massanddensityinterpolation(r, rnew, newdensity):
     rcoreenters = centeraveraging(r)
     # linearly interpolate w.r.t shell density such that total mass is preserved in interpolation
     density = np.interp(rcoreenters, rnew, rnew**2*newdensity)/rcoreenters**2
-    layermass = density*volumefunc(r)
+    layermass = density*4*pi*delta(r**3)/3
     return layermass, density
 
     
@@ -384,7 +384,7 @@ def restructuring(r, M, Matm, pebblerate = pebblerate, number_of_structure_bound
             fig, (ax1, ax2) = plt.subplots(1, 2)
             Mtotstr = str(np.round(Menc[-1]))
             fig.suptitle('Structure of magma ocean after '+str(j+1) +
-                         ' time steps. Total mass: '+Mtotstr+' Pg')
+                         ' timesteps. Total mass: '+Mtotstr+' Pg')
 
             colors = ['#1b7837', '#762a83', '#2166ac', '#b2182b']
 
@@ -490,12 +490,8 @@ else: # forsterite, Mg2SiO4
 # number of volatile-bearing products per volatile reactant
 alphaH2O = 2 # H2O(gas) + O(melt) = 2 OH(melt) e.g. Stolper1982. 
 alphaCO2 = 1 # CO2(gas) + O(melt) = CO3(melt) e.g. Ortenzi2016, Fegley2020. Or more accurately M2SiO4(melt)+CO2(g) = MCO3(melt) + MSiO3(melt) e.g. Spera1980. 
-alphaN2chem = 2 # N2(gas)+_*H2O(gas)+(3-_)*O(melt) = 2 NH_ + 3/2 O(gas) e.g. Grewal2020.
-alphaN2phys = 1 # N2(gas) = N2(melt)  
-N2index = 0 # choose which dissolution to use
-alphaN2 = np.array([alphaN2chem, alphaN2phys])[N2index]
-# alphai = np.array([alphaH2O, alphaCO2, alphaN2]) 
-alphai = np.array([[alphaH2O, 0],[alphaCO2, 0],[alphaN2chem, alphaN2phys]])
+alphaNH_ = 2 # N2(gas)+_*H2O(gas)+(3-_)*O(melt) = 2 NH_ + 3/2 O(gas) e.g. Grewal2020.
+alphai = np.array([alphaH2O, alphaCO2, alphaNH_]) 
 
 # initial mass of volatiles in melt, CHOICE
 XH2O = 2e3*1e-6 # 2e3 ppmw, AnatomyIII
@@ -534,13 +530,10 @@ def IWfO2func(p, T): # oxygen fugacity of the IW-buffer Fe + O <-> FeO. Hirschma
     log10fO2 = np.where(hcpdomain, fit(e,f,g,h), fit(a,b,c,d))
     return 10**log10fO2
 
-def fO2func(p, T, deltaIW=-2.2, cappedfraction=False): # oxygen fugacity 
+def fO2func(p, T, deltaIW=-2.2, cappedfraction=0.1): # oxygen fugacity 
     fO2para = IWfO2func(p, T)*10**deltaIW # fO2 as defined by Hirschmann2021 parametrization
-    if cappedfraction:
-        fO2max = p*cappedfraction # fO2 cannot exceed some fraction of the total pressure
-        return np.where(fO2max<fO2para, fO2max, fO2para)
-    else: 
-        return fO2para
+    fO2max = p*cappedfraction # fO2 cannot exceed some fraction of the total pressure
+    return np.where(fO2max<fO2para, fO2max, fO2para)
     
 # Carbon partition coefficient. Parametrization from Fischer2020. Pressure, temperature in GPa, K units.
 def PCfunc(p, T, deltaIW=-2.2, Xoxygen=0, Xsulfur=0, NBOperT=2.6, microprobe=False):
@@ -585,7 +578,6 @@ def iterativePH2O(p, MH2O, Msil, Mmet=Mmet, CH2Ometguess=0.01, iterations=10):
 
 # calculate oxygen fugacity of IW buffer
 fO2 = fO2func(pressure, temperature) 
-fO2surf = fO2[-1]
 
 # plot oxygen fugacity as function of p, T. Add our own p, T curve. 
 X, Y = np.meshgrid(pressure, temperature)
@@ -630,10 +622,9 @@ if evendist:
     # plt.ylabel('Water fraction inside metal droplets')
     # plt.xlabel('radius [km]')
 
-#-----------------------Gas-melt interaction functions-------------------------
 
 # pressure/Matm-dependent equilibrium coefficient function array
-def Kifunc(Matm, fO2surf, rsurf=rsurf, protomass=protomass, H2Oindex=0, meltindex=0): # choice of melt from which experimental K for CO2 is taken
+def Kifunc(Matm, fO2, rsurf=rsurf, protomass=protomass, H2Oindex=0, meltindex=0, N2index=0): # choice of melt from which experimental K for CO2 is taken
     psurf, Tsurf = pTsurf(rsurf, Matm=Matm)
     pinkbar = psurf*GPatokbar
     pinbar = psurf*GPatobar
@@ -646,46 +637,45 @@ def Kifunc(Matm, fO2surf, rsurf=rsurf, protomass=protomass, H2Oindex=0, meltinde
     KCO2withOlivineMelilite = 1/np.exp(13+5*pinkbar/30) # Spera1980, fig. 3. -||-
     KCO2 = np.array([KCO2withNepheline, KCO2withOlivineMelilite])[meltindex] # index choice
     
-    R = 8.31446261815324 # J/(mol*K), universal gas constant
-    KN2chem = np.exp(-(183733+172*Tsurf-5*pinbar)/(R*Tsurf))*fO2surf**(-3/4) # Bernadou2022, eq. 14 & Table 6. fO2 dependence from eq. 18
-    KN2phys = np.exp(-(29344+121*Tsurf+4*pinbar)/(R*Tsurf)) # Bernadou2022, eq. 13 & Table 6.
+    KN2phys = KH2O # PLACEHOLDER
+    KN2chem = KH2O
+    KN2 = np.array([KN2chem, KN2phys])[N2index]
     
-    return np.array([[KH2O, 0], [KCO2, 0], [KN2chem, KN2phys]])
+    return np.array([KH2O, KCO2, KN2phys, KN2chem])
 
 
 # returns masses of each volatile in the first atmosphere to be in equilibrium with the assumed starting volatile fraction in the silicate melt of the top layer of the magma ocean
-def startingatmosphere(Matm, Xiktop, AMUi, alphai, fO2surf):
-    Ki = Kifunc(Matm, fO2surf)
-    Kiused = np.max(Ki, axis=1) # PLACEHOLDER 
-    frac = Xiktop**alphai[:,0]*AMUi/Kiused
+def startingatmosphere(Matm, Xiktop, AMUi, alphai, fO2):
+    Ki = Kifunc(Matm, fO2)
+    frac = Xiktop**alphai*AMUi/Ki
     Miatm0 = frac/np.sum(frac)*Matm
     return Miatm0
 
 
 # input needs to be arrays, sensitive to actual values of input parameters (must be fairly close to equilibrium already) be careful
-def Miatmeqfunc(Miatmguess, rsurf, AMUi, alphai, Msiltop, Misil0, fO2surf, method='fsolve'): # function to find the dissolution equilbrium solution of the mass of volatile species in the atmosphere 
-    Mitot0 = Miatmguess+Misil0 # sum of volatiles in either reservoir before equilibriation
+def Miatmeqfunc(Miatm0, rsurf, AMUi, alphai, Msiltop, Misil0, method='fsolve'): # function to find the dissolution equilbrium solution of the mass of volatile species in the atmosphere 
+    Mitot0 = Miatm0+Misil0 # sum of volatiles in either reservoir before equilibriation
     def Miatmrootfunc(Miatm): # function of Miatm that evaluates to 0 at physical+chemical dissolution equilbrium between top layer of magma ocean and the atmosphere
         frac = Miatm/AMUi
-        Ki = Kifunc(np.sum(Miatm), fO2surf, rsurf) # calculate the equilibrium constants from pressure (or Matm)
-        return 1/Mitot0*(Miatm+((Ki[:,0]*frac/np.sum(frac))**(1/alphai[:,0])+(Ki[:,1]*frac/np.sum(frac))**(1/alphai[:,1]))*Msiltop-Mitot0)
+        Ki = Kifunc(np.sum(Miatm), rsurf) # calculate the equilibrium constants from pressure (or Matm)
+        return 1/Mitot0*(Miatm+(Ki*frac/np.sum(frac))**(1/alphai)*Msiltop-Mitot0) # better to solve for the unitless equation = 0
     # def derivativefunc(Miatm): 
         # quit # write fprime = derivativefunc as argument to fsolve
     if method=='fsolve': # appears to be stably solving further-from-equilibrium starting guesses
-        Miatmeq = fsolve(Miatmrootfunc, Miatmguess) # find roots to the function with a starting guess being the unequilibrated atmospheric mass of the volatile species.
+        Miatmeq = fsolve(Miatmrootfunc, Miatm0) # find roots to the function with a starting guess being the unequilibrated atmospheric mass of the volatile species.
     else:
-        Miatmeq = broyden1(Miatmrootfunc, Miatmguess, f_tol=1e-8) # use Broyden's good method instead
+        Miatmeq = broyden1(Miatmrootfunc, Miatm0, f_tol=1e-8) # use Broyden's good method instead
     print(np.isclose(Miatmrootfunc(Miatmeq), np.zeros_like(Miatmeq))) # check if roots are valid
     
     Misileq = Mitot0-Miatmeq # mass of volatile in magma ocean = total volatile mass minus volatile mass in atmosphere
     meltmassfraci = massfraction(Misileq, Msiltop) # mass fraction of volatile in top layer of magma ocean
     atmmassfraci = Miatmeq/np.sum(Miatmeq) # mass fraction of volatile in the atmosphere
     psurf = psurffunc(np.sum(Miatmeq), rsurf)
-    return Miatmeq, Misileq, meltmassfraci, atmmassfraci, psurf, Miatmeq/Miatmguess
+    return Miatmeq, Misileq, meltmassfraci, atmmassfraci, psurf, Miatmeq/Miatm0
 
 
-Miatmguess = startingatmosphere(Matmguess, Mvol0[:,-1]/Msilvol[-1], amui, alphai, fO2surf)
-eqstate = Miatmeqfunc(Miatmguess, rsurf, amui, alphai, Msil[-1], Mvol0[:,-1], fO2surf) # state of mass conservation and dissolution equilibrium
+Miatmguess = startingatmosphere(Matmguess, Mvol0[:,-1]/Msilvol[-1], amui, alphai, fO2)
+eqstate = Miatmeqfunc(Miatmguess, rsurf, amui, alphai, Msil[-1], Mvol0[:,-1]) # state of mass conservation and dissolution equilibrium
 Miatm0 = eqstate[0]
 Matm0 = np.sum(Miatm0)
 print(Matm0/np.sum(Miatmguess))
@@ -762,7 +752,7 @@ for timestep in range(number_of_timesteps):
     totalcoreloss += coreloss
     
     # magma ocean - atmosphere boundary interaction
-    eqstate = Miatmeqfunc(Miatm, rsurf, amui, alphai, Msil[-1], Mvol[:,-1], fO2surf)
+    eqstate = Miatmeqfunc(Miatm, rsurf, amui, alphai, Msil[-1], Mvol[:,-1])
     Miatm = eqstate[0]
     Mvol[:,-1] = eqstate[1] # update magma ocean top layer's volatile content
     Matm = np.sum(eqstate[0])
@@ -791,7 +781,7 @@ for timestep in range(number_of_timesteps):
                     wspace=0.3, 
                     hspace=0.3)
         ax1, ax2, ax3, ax4 = axs[0,0], axs[0,1], axs[1,0], axs[1,1]
-        fig.suptitle('Time step '+str(timestep+1)+', '+"{:.1f}".format(simulatedyears)+' years. '+r"$M_{\mathrm{atm}} = $"+"{:.1f}".format(Matm/Matm0)+r"$\ M_{\mathrm{atm}, 0}$", y=1.05)
+        fig.suptitle('Time step '+str(timestep+1)+', '+"{:.1f}".format(simulatedyears)+' years', y=1.05)
         for i in irange:
             ax1.semilogy(layercenters, Mvol0[i]/Mtot0, color=vcolors[i], label=volatiles[i])
             ax1.semilogy(layercenters, volfrac[i], '.', color=vcolors[i])
