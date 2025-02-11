@@ -716,7 +716,7 @@ def PH2Ofunc(p, XH2Omet):
 
 # mass of water in metal droplets/mass of metal droplets, (torn long-edge @ page 8 of block C for derivation) 
 def watermetalfraction(PH2O, MH2O, Msil, Mmet=Mmet):
-    return PH2O*MH2O/(PH2O*Mmet+Msil) 
+    return PH2O*MH2O/(PH2O*Mmet+Msil)
 
 
 # calculates PH2O then watermetalfraction, then back to PH2O using a starting guess for the mass fraction of water in the metal droplets.
@@ -811,8 +811,8 @@ def Miatmeqfunc(Miatmguess, rsurf, AMUi, alphai, Msiltop, Misil0, fO2surf, proto
     else:
         Miatmeq = broyden1(Miatmrootfunc, Miatmguess, f_tol=1e-8) # use Broyden's good method instead
     print(str(np.isclose(Miatmrootfunc(Miatmeq), np.zeros_like(Miatmeq)))+'. Miatm,eq/Miatm0: '+str(Miatmeq/Miatmguess)) # check if roots are valid
-    
-    Misileq = Mitot0-Miatmeq # mass of volatile in magma ocean = total volatile mass minus volatile mass in atmosphere
+
+    Misileq = Mitot0-Miatmeq # ERROR: CAN PRODUCE NEGATIVE TOP MASSES. mass of volatile in magma ocean = total volatile mass minus volatile mass in atmosphere
     meltmassfraci = massfraction(Misileq, Msiltop) # mass fraction of volatile in top layer of magma ocean
     atmmassfraci = Miatmeq/np.sum(Miatmeq) # mass fraction of volatile in the atmosphere
     psurf = psurffunc(np.sum(Miatmeq), rsurf)
@@ -982,10 +982,6 @@ for timestep in range(number_of_timesteps):
     dt = stdmax**2/(2*D) # update dt as D changes
     simulatedyears += dt # add dt to the simulated time 
 
-    # Run without sedimentation for the first nosedifrac fraction of the total time to be simulated.
-    if simulatedyears>settime*nosedifrac: 
-        vmet = 1e-3*secondsperyear  # 1 m/s in km yr-1, falling speed of metal blobs
-    
     # volatile motion inside magma ocean
     Mvol, Micore, corediff = transMvol(Mvol, Micore, eigval, eigvec, Vinv, dt, vmet) # transport using linalg equations for the change in mass in each layer
     Mtot = Msil+Mmet+np.sum(Mvol, axis=0)
@@ -1000,6 +996,10 @@ for timestep in range(number_of_timesteps):
     
     # magma ocean restructuring
     if timestep % restructuringspacing == 0 or timestep == number_of_timesteps-1:
+        # Run without sedimentation for the first nosedifrac fraction of the total time to be simulated.
+        if simulatedyears>settime*nosedifrac: 
+            vmet = 1e-3*secondsperyear  # 1 m/s in km yr-1, falling speed of metal blobs
+        
         if growthbool: # if we want to grow the planet
             mc += restructuringspacing*pebblerate*pebblemetalfrac*dt # grow core by directly adding core mass
             rcore = (3*mc/(4*pi*coremetaldensity))**(1/3) # calculate new core radius
@@ -1018,7 +1018,7 @@ for timestep in range(number_of_timesteps):
         Msilmet = Msil+Mmet # subtract mass of metal to get mass of silicates in each magma ocean layer 
         Mtot = Msil+Mmet+np.sum(Mvol, axis=0) # total mass
         
-        PH2O, CH2Omet = iterativePH2O(pressure, Mvol[0], Msil, Mmet)
+        PH2O, CH2Omet = iterativePH2O(pressure, Mvol[0], Msil, Mmet, CH2Ometguess=CH2Omet)
         PC = PCfunc(pressure, temperature, 0)
         PN = PNfunc(pressure, temperature, XFeO)
         Pvol = np.array([PH2O, PC, PN]) # array of all the volatile species' partition coefficients (at all magma ocean layers)        
@@ -1097,7 +1097,7 @@ for timestep in range(number_of_timesteps):
     # Check speed of the simulation so far
     currentlooptimeelapsed = checktime-loopstart
     currentsimulationspeed = simulatedyears/currentlooptimeelapsed
-    print('Simulation speed = '+str(currentsimulationspeed)+' yr/s.')
+    print('Simulation speed = '+str(currentsimulationspeed)+' yr/s. '+'Time step speed = '+str(timestep/currentlooptimeelapsed))
 
     if (checktime-loopstart)>4.8*86400: # 5 days is maximum cluster time
         break # stop prematurely so that the code has time to save variables before 5 day node limit is reached
