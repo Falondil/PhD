@@ -222,13 +222,15 @@ alphai = np.array([[alphaH2O, 1],[alphaCO2, 1],[alphaN2chem, alphaN2phys]]) # 1 
 
 # initial total mass of volatiles, CHOICE
 MH2Otot0 = 2e3*1e-6*earthmass # Fig. 11, AnatomyIII.
-MCtot0 = 600*1e-6*earthmass # 600 ppmw total estimated from Anders2021 or AnatomyIII. 27 ppmw of total planet mass of Venus lies in atmosphere (google) 
+MCtot0 = 600*1e-6*earthmass # 600 ppmw total estimated from Anders2021 or AnatomyIII. 27 ppmw of total planet mass of Venus lies in atmosphere (google). "The total amount of carbon in our planet is relatively poorly constrained."
 MNtot0 = 10**0.5*1e-6*earthmass # mass fraction of total planet mass of Venus in atmosphere, from same figure in AnatomyIII
 Mitot0 = np.array([MH2Otot0, MCtot0, MNtot0])
 
 XFeO = 0.1 # PLACEHOLDER. NEEDED FOR PNfunc and CO2 solubility. GET CORRECT CALCULATION OF THIS. 
 XO = 0.08 # 8wt% from Fischer2020 upper limit of core currently. 
 XS = 0
+
+# IDEA. Specify priors for XFeO, XO, and XS based on calc.d upper limits of core mass fraction. 
 
 #------------------------------Structure functions-----------------------------
 # calculates volume of all magma ocean layers using layer boundaries r
@@ -1284,14 +1286,14 @@ for timestep in range(1, number_of_timesteps+1):
         ax1.semilogy(layercenters, np.transpose(Pvol), label=volatiles)
         ax1.set_xlabel('radius [km]')
         ax1.set_ylabel('Partition coefficient')
-        ax1.set_ylim([1e-1, 1e3])
+        ax1.set_ylim([1e-2, 1e3])
         ax1.legend()
         ax1.grid(True)
 
         ax2.set_prop_cycle('color', vcolors)
         ax2.semilogy(pressure, np.transpose(Pvol), label=volatiles)
         ax2.set_xlabel('Pressure [GPa]')
-        ax2.set_ylim([1e-1, 1e3])
+        ax2.set_ylim([1e-2, 1e3])
         ax2.grid(True)
         
         if figuresaving:
