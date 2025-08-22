@@ -812,7 +812,7 @@ def watermetalfraction(PH2O, MH2O, Msil, Mmet):
 def iterativePH2O(p, MH2O, Msil, Mmet, CH2Ometguess=0.01, iterations=10):
     for j in range(iterations):
         PH2Oguess = PH2Ofunc(p, CH2Ometguess)
-        CH2Ometguess = watermetalfraction(PH2O, MH2O, Msil, Mmet)
+        CH2Ometguess = watermetalfraction(PH2Oguess, MH2O, Msil, Mmet)
     return PH2Oguess, CH2Ometguess
 
 
