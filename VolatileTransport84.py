@@ -22,6 +22,7 @@ from scipy.linalg import inv
 figuresaving = True
 PCpaper = ['Fischer', 'Blanchard','Johansen'][2] # Fischer2020 or Blanchard2022 or AnatomyIII
 PNpaper = ['Grewal', 'Huang','Johansen'][2] # Grewal2019 or Huang2024 or AnatomyIII
+saturation = False # should volatile saturation in metal droplets be accounted for
 latecarbonaccretion = True
 cappedtemperature = True
 constanttemperature = True
@@ -95,6 +96,9 @@ Ppaperlabel = ['',' - '+PCpaper, ' - '+PNpaper] # label figures with the part. c
 # irange = range(len(volatiles))
 
 print('Partition coefficient papers: ', Ppaperlabel) # print which papers we use for the partition coefficients
+print('Late carbon accretion: ', latecarbonaccretion)
+print('Saturation adjustment: ', saturation)
+
 
 pi = np.pi
 sqrtpi = np.sqrt(np.pi)
@@ -232,7 +236,6 @@ MH2Otot0 = 2e3*1e-6*earthmass # Fig. 11, AnatomyIII.
 # MCtot0 = 44/12*(526*1e-6+coremassfraction*0.3/100)*earthmass # Alt 2. Marty2012 for 526 ppm. Chen2014 for 0.3wt% C in bulk core (0.2-1wt% from cited papers). 12/44 conversion factor since we count mass of carbon in terms of CO2. WRONG FACTOR
 MCtot0 = 44/12*((1-coremassfraction)*140*1e-6+coremassfraction*0.3/100)*earthmass # Alt 3. Hirschmann2018 for 140 ppm. Chen2014 for 0.3wt% C in bulk core (0.2-1wt% from cited papers). 44/12 conversion factor since 
 MNtot0 = 10**0.5*1e-6*earthmass # mass fraction of total planet mass of Venus in atmosphere, from same figure in AnatomyIII
-Mitot0 = np.array([MH2Otot0, MCtot0, MNtot0])
 
 # ALT. TAKE END POINT MASS OF VOLATILES FROM FIG. 11 AND MULTIPLY BY 0.6 ME TO GET VOLATILE MASS INI FROM ORDINARY CHONDRITES.
 
@@ -243,12 +246,15 @@ XS = 0
 # IDEA. Specify priors for XFeO, XO, and XS based on calc.d upper limits of core mass fraction. 
 
 if latecarbonaccretion:
-    initialcarbonfraction = 0.5 # CHOICE 
     carbonstoppingmass = 0.1*earthmass # fig. 7 from AnatomyIII
+    initialcarbonfraction = (startingmass*earthmass)/carbonstoppingmass # CHOICE 
 
     MCtot0 *= initialcarbonfraction # less carbon to start with if we accrete over the simulation time (In order to end up with same total carbon whether or not choice was made)
     # exponential accretion of carbon:
-    pebblecarbonfrac = (MCtot0/initialcarbonfraction-MCtot0)/(carbonstoppingmass-startingmass)
+    pebblecarbonfrac = (MCtot0/initialcarbonfraction-MCtot0)/(carbonstoppingmass-startingmass*earthmass)
+
+# Store all initial volatile masses in volatile mass array
+Mitot0 = np.array([MH2Otot0, MCtot0, MNtot0])
 
 #------------------------------Structure functions-----------------------------
 # calculates volume of all magma ocean layers using layer boundaries r
@@ -786,7 +792,8 @@ def PNfunc(p, T, PNpaper=PNpaper):
     elif PNpaper == 'Huang':
         return PNfuncHuang(p, T)
     else:
-        return np.ones_like(p)*10
+        return np.ones_like(p)*10 # AnatomyIII
+
 
 # Water partition function. Parametrization from Luo2024. Function of water concentration in metal melt.
 def PH2Ofunc(p, XH2Omet):
@@ -805,7 +812,7 @@ def watermetalfraction(PH2O, MH2O, Msil, Mmet):
 def iterativePH2O(p, MH2O, Msil, Mmet, CH2Ometguess=0.01, iterations=10):
     for j in range(iterations):
         PH2Oguess = PH2Ofunc(p, CH2Ometguess)
-        CH2Ometguess = watermetalfraction(PH2Oguess, MH2O, Msil, Mmet)
+        CH2Ometguess = watermetalfraction(PH2O, MH2O, Msil, Mmet)
     return PH2Oguess, CH2Ometguess
 
 
@@ -1086,17 +1093,6 @@ def eigandVinv(rk, Msil, Mmet, vmet, D, Pvol):
         Vinv[i] = inv(eigvec[i])
     return eigval, eigvec, Vinv
 
-def transportwrapper(Mvol0, Micore0, dt, rk, Msil, Mmet, vmet, D, Pvol): # wrapper for both functions to solve the transport equation: eigandVinv and transMvol. Also accounts for saturation
-    saturation = np.array([1*np.ones_like(Msil), 0.05*np.ones_like(Msil), 1*np.ones_like(Msil)]) # Approximate for carbon. Placeholder for hydrogen and nitrogen. Doesn't matter     
-    # adjust partition coefficient to not exceed volatile saturation in the metal
-    Pvoladjust = np.where(Mvol0*Pvol/(Mmet*Pvol+Msil)>saturation, saturation*Msil/(Mvol-saturation*Mmet), Pvol)
-    print(Pvoladjust==Pvol)
-    plt.figure()
-    for i in range(1,2): #irange:
-        plt.plot(Pvoladjust[i]==Pvol[i], color=vcolors[i])
-    eigval, eigvec, Vinv = eigandVinv(rk, Msil, Mmet, vmet, D, Pvoladjust) # input the adjusted partition coef.
-    return transMvol(Mvol0, Micore0, eigval, eigvec, Vinv, dt, vmet)
-
 def transMvol(Mvol0, Micore0, eigval, eigvec, Vinv, dt, vmet):
     if vmet != 0: # check if we have sedimentation into core
         Mvol0 = np.insert(Mvol0, 0, Micore0, axis=1) # extend volatile masses array to have core mass as first element
@@ -1114,7 +1110,15 @@ def transMvol(Mvol0, Micore0, eigval, eigvec, Vinv, dt, vmet):
         corediff = 0
     return Mvol, Micore, corediff
 
-
+def transportwrapper(Mvol0, Micore0, dt, rk, Msil, Mmet, vmet, D, Pvol): # wrapper for both functions to solve the transport equation: eigandVinv and transMvol. Also accounts for saturation
+    saturation = np.array([1*np.ones_like(Msil), 0.05*np.ones_like(Msil), 1*np.ones_like(Msil)]) # Approximate for carbon. Placeholder for hydrogen and nitrogen. Doesn't matter     
+    # adjust partition coefficient to not exceed volatile saturation in the metal
+    Pvoladjust = np.where(Mvol0*Pvol/(Mmet*Pvol+Msil)>saturation, saturation*Msil/(Mvol-saturation*Mmet), Pvol)
+    plt.figure()
+    for i in range(1,2): #irange:
+        plt.plot(Pvoladjust[i]==Pvol[i], color=vcolors[i])
+    eigval, eigvec, Vinv = eigandVinv(rk, Msil, Mmet, vmet, D, Pvoladjust) # input the adjusted partition coef.
+    return transMvol(Mvol0, Micore0, eigval, eigvec, Vinv, dt, vmet)
 
 #---------------------Initial Structure without volatiles----------------------
 # create magma ocean layer boundaries and calculate (p, T, rho) at the center of these layers
@@ -1183,26 +1187,26 @@ if nosedifrac>0 and not continuefromrun: # set to 0 at start iff chosen.
 eigval0, eigvec0, Vinv0 = eigandVinv(rk, Msil, Mmet, vmet, D, Pvol) # calculate initial eigenvalues & eigenvectors of Ai matrix and the inverse of the matrix of these eigenvectors. 
 
 # Check that the transport method of eigandVinv and transMvol is working together
-eigval, eigvec, Vinv = eigandVinv(rk, Msil, Mmet, vmet, D, Pvol)
-Mvol, Micore, _ = transMvol(Mvol0, Micore0, eigval, eigvec, Vinv, dt, vmet)
-plt.figure()
-for i in irange:
-    plt.plot(layercenters, (Mvol[i]-Mvol0[i])/Mvol0[i], '.', color=vcolors[i], label=volatiles[i])
-plt.title('Volatile mass change in magma ocean')
-plt.xlabel('radius [km]')
-plt.ylabel('Change relative to previous volatile layer mass')
-plt.legend(loc='best')
+# eigval, eigvec, Vinv = eigandVinv(rk, Msil, Mmet, vmet, D, Pvol)
+# Mvol, Micore, _ = transMvol(Mvol0, Micore0, eigval, eigvec, Vinv, dt, vmet)
+# plt.figure()
+# for i in irange:
+#     plt.plot(layercenters, (Mvol[i]-Mvol0[i])/Mvol0[i], '.', color=vcolors[i], label=volatiles[i])
+# plt.title('Volatile mass change in magma ocean')
+# plt.xlabel('radius [km]')
+# plt.ylabel('Change relative to previous volatile layer mass')
+# plt.legend(loc='best')
 
 # Test the wrapper
-Mvol2, Micore2, _ = transportwrapper(Mvol0, Micore0, dt, rk, Msil, Mmet, vmet, D, Pvol)
-plt.figure()
-for i in range(1,2):
-    plt.plot(layercenters, (Mvol2[i]-Mvol0[i])/Mvol0[i], '.', color=vcolors[i], label=volatiles[i])
-    plt.plot(layercenters, (Mvol[i]-Mvol0[i])/Mvol0[i], 'x', color=vcolors[i], label=volatiles[i])
-plt.title('Volatile mass change in magma ocean')
-plt.xlabel('radius [km]')
-plt.ylabel('Change relative to previous volatile layer mass')
-plt.legend(loc='best')
+# Mvol2, Micore2, _ = transportwrapper(Mvol0, Micore0, dt, rk, Msil, Mmet, vmet, D, Pvol)
+# plt.figure()
+# for i in range(1,2):
+#     plt.plot(layercenters, (Mvol2[i]-Mvol0[i])/Mvol0[i], '.', color=vcolors[i], label=volatiles[i])
+#     plt.plot(layercenters, (Mvol[i]-Mvol0[i])/Mvol0[i], 'x', color=vcolors[i], label=volatiles[i])
+# plt.title('Volatile mass change in magma ocean')
+# plt.xlabel('radius [km]')
+# plt.ylabel('Change relative to previous volatile layer mass')
+# plt.legend(loc='best')
 
 if continuefromrun: # load variables from previous simulation end step
     with open('continuefile', 'rb') as f:
@@ -1257,7 +1261,10 @@ for timestep in range(1, number_of_timesteps+1):
     simulatedyears += dt # add dt to the simulated time 
 
     # volatile motion inside magma ocean
-    Mvol, Micore, corediff = transMvol(Mvol, Micore, eigval, eigvec, Vinv, dt, vmet) # transport using linalg equations for the change in mass in each layer
+    if saturation: # if we consider saturation limits for volatiles in metal droplets
+        Mvol, Micore, corediff = transportwrapper(Mvol, Micore, dt, rk, Msil, Mmet, vmet, D, Pvol) # transport wrapper (needs to recalculate eigval, eigvec and vinv because Pvol might change since Xvol does)
+    else:
+        Mvol, Micore, corediff = transMvol(Mvol, Micore, eigval, eigvec, Vinv, dt, vmet) # transport using linalg equations for the change in mass in each layer
     Mtot = Msil+Mmet+np.sum(Mvol, axis=0)
     Mmagma = np.sum(Mtot) # sum of all magma ocean layers
     mc = mc+np.sum(corediff) # add volatile mass to core mass
@@ -1293,7 +1300,6 @@ for timestep in range(1, number_of_timesteps+1):
             # CHOICE, add late accretion of carbon
             if latecarbonaccretion and protomass<carbonstoppingmass:
                 Miatm[1] += restructuringspacing*pebblerate*pebblecarbonfrac*dt # add accreted carbon mass to the atmosphere
-
             # total mass of planet
             protomass = mc+Mmagma+np.sum(Miatm)+np.sum(Miatmextra)
             pebblerate = protomass/tau
@@ -1314,7 +1320,8 @@ for timestep in range(1, number_of_timesteps+1):
         Pvol = np.array([PH2O, PC, PN]) # array of all the volatile species' partition coefficients (at all magma ocean layers)        
         
         # matrix of coefficients Ai updates every restructuring time step. Where Ai is defined from dMi/dt = Ai Mi
-        eigval, eigvec, Vinv = eigandVinv(rk, Msil, Mmet, vmet, D, Pvol)
+        if not saturation:
+            eigval, eigvec, Vinv = eigandVinv(rk, Msil, Mmet, vmet, D, Pvol)
 
     # Storing time step variables 
     if timestep % savingspacing == 1 or timestep == number_of_timesteps:
