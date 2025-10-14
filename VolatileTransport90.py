@@ -25,8 +25,8 @@ from scipy.linalg import inv
 figuresaving = True
 teststartingvolatiles=True
 PH2Opaper = ['Luo'][0] # Luo2024 
-PCpaper = ['Fischer', 'Blanchard','Johansen','Tsutsumi'][1] # Fischer2020 or Blanchard2022 or AnatomyIII or Tsutsumi2025
-PNpaper = ['Grewal', 'Huang','Johansen'][1] # Grewal2019 or Huang2024 or AnatomyIII
+PCpaper = ['Fischer', 'Blanchard','Johansen','Tsutsumi'][0] # Fischer2020 or Blanchard2022 or AnatomyIII or Tsutsumi2025
+PNpaper = ['Grewal', 'Huang','Johansen'][0] # Grewal2019 or Huang2024 or AnatomyIII
 constantdeltaIW = True # should oxygen fugacity stay the same as the planet grows?
 homogeneousdeltaIW = True # should deltaIW be the same at the surface and throughout the entire magma ocean?
 saturation = False # should volatile saturation in metal droplets be accounted for
@@ -952,7 +952,7 @@ def SolubilityParameters(differentCO2=True, differentnitrogen=True, differentCO=
         # betaired[1] = 1/0.8
 
         # Alternative 3: Hirschmann2016 
-        alphaired[1] = 44/28*0.55/1e6 # convert to equiv. CO2 and to Pa from MPa. 
+        alphaired[1] = 0.55/1e6 # convert to equiv. CO2 and to Pa from MPa. (I don't think I should. Data points XC(m) from Armstrong2015 multiplied by 44/12 to get XCO2(m) as function of fCO is fitted by Hirschmann2016's X_C = 0.55 ppmw/MPa p_CO)
         betaired[1] = 1 # Henrian
     return alphaioxi, betaioxi, alphaired, betaired
 
@@ -1333,7 +1333,7 @@ if teststartingvolatiles:
         ret = iterativestartingvolatiles2(Mitot0, Mmagma, Xiguess, amuifull, fO2surflist[j], protomass, rsurf, psurf, Tsurf)
         retarray.append(ret)
 
-    plt.figure()
+    startingvolatilesfig = plt.figure()
     plt.suptitle('Starting atmosphere as function of oxygen fugacity')
     for i in irange:
         plt.subplot(121)
@@ -1352,6 +1352,8 @@ if teststartingvolatiles:
         plt.ylabel('Partial pressure [bar]')
         plt.xlabel('deltaIW')
         plt.grid()
+        startingvolatilesfig.savefig('Plots/ResultPlots'+Ppaperlabel[1]+'/startingvolatiles.png', bbox_inches='tight', dpi=200)
+
 
     plt.subplot(121)
     plt.semilogy(deltaIWlist, [sum(retarray[j][0])/earthmass+sum(retarray[j][1])/earthmass for j in range(len(deltaIWlist))],'-', color='k', label='sum')
