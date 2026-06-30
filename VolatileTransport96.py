@@ -548,7 +548,7 @@ def topdownadiabat(rvar, drvar, pressure, Menc, Tsurf): # Layer step-wise calcul
 
 
 # calculates the new density by analytic integration of K w.r.t. pressure first (using linear K w.r.t pressure).
-def densityfunc(pressure, temperature, topdensity = silicatedensity):
+def densityfuncMine(pressure, temperature, topdensity = silicatedensity):
     pressureflip = np.flip(pressure)  # flip the pressure
     temperatureflip = np.flip(temperature)  # flip the temperature
     # calculates the thermal expansion coefficient assumed to be constant in each layer
@@ -564,29 +564,30 @@ def densityfunc(pressure, temperature, topdensity = silicatedensity):
         # print('Their product: '+str(densityflip[i]/densityflip[i-1]))
     return np.flip(densityflip)
 
-interp = LinearNDInterpolator(list(zip(P, T)), rho) # create the interpolator object or whatever its called
-# rho_new = interp(P_new, T_new) # example call to the object to compute what some new density should be
+
+# Load T, rho, P dataset and construct Linear2DInterpolation from P, T -> rho
+with open('densitymap', 'rb') as f:
+    dataset = pickle.load(f)
+
+# construct the interpolator object
+interp = LinearNDInterpolator(
+    np.concatenate([
+        np.column_stack((P, np.full_like(P, T)))
+        for T, rho, P in dataset
+    ]),
+    np.concatenate([rho for T, rho, P in dataset])
+)
 
 # calculates the new density w.r.t pressure, temperature using Caracas2024, BM3/4 + modified Holland-Powell equation
-def densityfunc2(pressure, temperature):
-    pressureflip = np.flip(pressure)  # flip the pressure
-    temperatureflip = np.flip(temperature)  # flip the temperature
-    
-    # Caracas2024, Table 3 EOS parameters
-    T_ref = 2000 # K
-    rho_ref = 2.45 # g cm-3 = Pg km-3
-    Kref = 24.864 # GPa
-    Kprime = 4.197 # unitless
-    Kbis = -0.087 # GPa-1
-    dKdT = -4.62*1e-3 # -4.62 MPa/K = -0.00462 GPa/K
-    
-    # SOMETHING IS VERY WRONG WITH THESE 2
-    alpha0 = 23.385 # K-1 ???
-    alpha1 = 66.432 # K-1/2 ???
+def densityfuncCaracasInterp(pressure, temperature):
+    return interp(pressure, temperature) 
 
-    rho_0_T = rho_ref/(1+alpha0*(temperature-T_ref)-2*(10*alpha0-alpha1)*(np.sqrt(temperature)-np.sqrt(T_ref)))
-    
-    return
+# wrapper for either choice of densityfunc
+def densityfunc(pressure, temperature, functionchoice='interp'):
+    if functionchoice=='interp':
+        return densityfuncCaracasInterp(pressure, temperature)
+    elif functionchoice=='Mine':
+        return densityfuncMine(pressure, temperature)
 
 
 # calculates new layerboundaries to keep mass inside each layer constant despite new densities
