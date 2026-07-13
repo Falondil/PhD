@@ -23,7 +23,6 @@ from scipy.linalg import eig
 from scipy.linalg import inv
 from scipy.interpolate import LinearNDInterpolator
 
-
 # CHOICES
 figuresaving = False
 foldersaving = True
@@ -31,6 +30,7 @@ teststartingvolatiles = False
 PH2Opaper = ['Tagawa', 'Luo'][1] # Tagawa2021, Luo2024 
 PCpaper = ['Fischer', 'Blanchard','Johansen','Tsutsumi'][1] # Fischer2020 or Blanchard2022 or AnatomyIII or Tsutsumi2025
 PNpaper = ['Grewal', 'Huang','Johansen'][1] # Grewal2019 or Huang2024 or AnatomyIII
+interiorstructuremodel = ['Abe', 'Caracas', 'PALEOS'][1] # Abe1997, Caracas2024, or Attia2026
 planetesimalaccretion = False # accrete planetesimals (continuous volatile delivery)
 latevolatileaccretion = True or planetesimalaccretion # if planetesimalaccretion then latevolatileaccretion too
 numEarthoceanscore = [9, 45][0] # Huang2026, number of Earth oceans in core
@@ -120,6 +120,7 @@ print('Folder saving:', foldersaving)
 print('Solubility factor:', solubilityfactor)
 print('deltaIW:', deltaIW)
 print('Earth oceans in core:', numEarthoceanscore)
+print('Interior structure model:', interiorstructuremodel)
 
 pi = np.pi
 sqrtpi = np.sqrt(np.pi)
@@ -412,8 +413,26 @@ def pTsurf(rsurf, Matm=Matmguess, pebblerate=pebblerate0, protomass=protomass, g
 
 
 # K-1, calculates the volumetric thermal expansion coefficient as a function in units of GPa of pressure. Abe1997
-def thermalexpansion(pressure):
+def thermalexpansionAbe(pressure):
     return alpha0*(pressure*K0prime/K0+1)**((1-K0prime)/K0prime)
+
+
+# K-1, calculates volumetric thermal expansion coefficient from Caracas2024 interpolation
+def thermalexpansionCaracas(P, T, dT=100):
+
+    rho0 = densityfuncCaracasInterp(P, T)
+    rho_plus = densityfuncCaracasInterp(P, T + dT)
+    rho_minus = densityfuncCaracasInterp(P, T - dT)
+
+    drho_dT = (rho_plus-rho_minus) / (2 * dT)
+
+    return -drho_dT / rho0
+
+def thermalexpansion(pressure, temperature, alphachoice=interiorstructuremodel):
+    if alphachoice=='Caracas':
+        return thermalexpansionCaracas(pressure, temperature)
+    elif alphachoice=='Abe':
+        return thermalexpansionAbe(pressure)
 
 
 # Shomate equation for specific heat capacity of silicate as function of temperature. NIST Webbook, Condensed phase thermochemistry data
@@ -533,8 +552,6 @@ def topdownadiabat(rvar, drvar, pressure, Menc, Tsurf): # Layer step-wise calcul
     Mencflip = np.flip(Menc[1:])  # also flip the enclosed mass array
     # and the pressure array (innermost pressure is not needed)
     pressureflip = np.flip(centeraveraging(pressure))
-    # calculates the flipped thermal expansion coefficient
-    alphaflip = thermalexpansion(pressureflip)
     # create array for storing temperatures of the adiabatic temperature profile
     adiabattemperatureflip = np.zeros(number_of_structure_boundaries)
     # surface temperature for the first temperature of the adiabat
@@ -542,22 +559,23 @@ def topdownadiabat(rvar, drvar, pressure, Menc, Tsurf): # Layer step-wise calcul
     for i in range(1, len(rvar)):
         # use previous layer's temperature to estimate the specific heat throughout the layer
         Cp = Cpfuncsil(adiabattemperatureflip[i-1])
+        alpha = thermalexpansion(pressureflip[i-1], adiabattemperatureflip[i-1])
         adiabattemperatureflip[i] = adiabattemperatureflip[i-1]*np.exp(
-            drflip[i-1]*alphaflip[i-1]*G*Mencflip[i-1]/(Cp*rflip[i-1]**2))  # take a layer step in temperature
+            drflip[i-1]*alpha*G*Mencflip[i-1]/(Cp*rflip[i-1]**2))  # take a layer step in temperature
     return np.flip(adiabattemperatureflip)  # flip it back before returning
 
 
 # calculates the new density by analytic integration of K w.r.t. pressure first (using linear K w.r.t pressure).
-def densityfuncMine(pressure, temperature, topdensity = silicatedensity):
+def densityfuncAbe(pressure, temperature, topdensity = silicatedensity):
     pressureflip = np.flip(pressure)  # flip the pressure
     temperatureflip = np.flip(temperature)  # flip the temperature
     # calculates the thermal expansion coefficient assumed to be constant in each layer
-    alphaflip = centeraveraging(thermalexpansion(pressureflip))
     densityflip = np.zeros(number_of_structure_boundaries)
     densityflip[0] = topdensity # density if not subject to bulk compression/thermal expansion
     for i in range(1, number_of_structure_boundaries):
+        alpha = thermalexpansion(pressureflip[i-1], temperatureflip[i-1])
         densityflip[i] = densityflip[i-1]*((K0+pressureflip[i]*K0prime)/(K0+pressureflip[i-1]*K0prime))**(
-            1/K0prime)*np.exp(-alphaflip[i-1]*(temperatureflip[i]-temperatureflip[i-1]))
+            1/K0prime)*np.exp(-alpha*(temperatureflip[i]-temperatureflip[i-1]))
         # print('Temperature expansion: '+str(np.exp(-alphaflip[i-1]*(temperatureflip[i]-temperatureflip[i-1]))))
         # print('Pressure compression: '+str(((K0+pressureflip[i]*K0prime)/(K0+pressureflip[i-1]*K0prime))**(
         #     1/K0prime)))
@@ -565,12 +583,12 @@ def densityfuncMine(pressure, temperature, topdensity = silicatedensity):
     return np.flip(densityflip)
 
 
-# Load T, rho, P dataset and construct Linear2DInterpolation from P, T -> rho
+# Load T, rho, P from Caracas2024 Supplementary Table S1
 with open('densitymap', 'rb') as f:
     dataset = pickle.load(f)
 
-# construct the interpolator object
-interp = LinearNDInterpolator(
+# construct Linear2DInterpolation from P, T -> rho
+Caracasinterp = LinearNDInterpolator(
     np.concatenate([
         np.column_stack((P, np.full_like(P, T)))
         for T, rho, P in dataset
@@ -578,17 +596,72 @@ interp = LinearNDInterpolator(
     np.concatenate([rho for T, rho, P in dataset])
 )
 
-# calculates the new density w.r.t pressure, temperature using Caracas2024, BM3/4 + modified Holland-Powell equation
+# calculates the new density w.r.t pressure, temperature. Wrapper for the linear 2D interpolation from Caracas2024 data
+# WILL return NaN if outside valid convex hull. The hull spans 2000-6000 K and 0-240 GPa at 2000 K, 0-130 GPa at 6000 K
 def densityfuncCaracasInterp(pressure, temperature):
-    return interp(pressure, temperature) 
+    return Caracasinterp(pressure, temperature) 
 
+
+# PALEOS Attia2026 alternative
+if interiorstructuremodel == 'PALEOS':
+    resolutionbool = 'high'
+    if resolutionbool == 'high':
+        PALEOSfile = 'paleos_mgsio3_eos_table_pt_highres.dat'
+        n_P, n_T = 5401, 1515
+    else:
+        PALEOSfile = 'paleos_mgsio3_eos_table_pt.dat'
+        n_P, n_T = 1351, 380
+    P_min, P_max = 1e5, 1e14       # Pa
+    T_min, T_max = 300.0, 1e5      # K
+
+    # Load data
+    cols = ['P','T','rho','u','s','cp','cv','alpha','nabla_ad','phase']
+    data = np.genfromtxt('paleos_mgsio3_eos_table_pt.dat',
+                        names=cols, dtype=None, encoding='utf-8')
+
+    # Reconstruct full regular grid
+    log_P = np.linspace(np.log10(P_min), np.log10(P_max), n_P)
+    log_T = np.linspace(np.log10(T_min), np.log10(T_max), n_T)
+
+    rho = np.full((n_P, n_T), np.nan)
+    for row in data:
+        i = np.searchsorted(log_P, np.log10(row['P']))
+        j = np.searchsorted(log_T, np.log10(row['T']))
+        if i < n_P and j < n_T:
+            rho[i, j] = row['rho']
+
+    Pgrid, Tgrid = np.meshgrid(log_P, log_T, indexing='ij')
+
+    # avoid NaNs
+    mask = np.isfinite(rho)
+
+    # Construct the interpolator
+    PALEOSinterp = PALEOSinterp = LinearNDInterpolator(
+        np.column_stack((Pgrid[mask], Tgrid[mask])),
+        rho[mask]
+    )
+
+    def densityfuncPALEOSinterp(pressure, temperature):
+        pressure = np.atleast_1d(pressure*1e9)
+        temperature = np.atleast_1d(temperature)
+
+        points = np.column_stack((
+            np.log10(pressure),
+            np.log10(temperature)
+        ))
+
+        return PALEOSinterp(points)/1e3
+    
 # wrapper for either choice of densityfunc
-def densityfunc(pressure, temperature, functionchoice='interp'):
-    if functionchoice=='interp':
+def densityfunc(pressure, temperature, functionchoice=interiorstructuremodel):
+    if functionchoice=='Caracas':
         return densityfuncCaracasInterp(pressure, temperature)
-    elif functionchoice=='Mine':
-        return densityfuncMine(pressure, temperature)
-
+    elif functionchoice=='Abe':
+        return densityfuncAbe(pressure, temperature)
+    elif functionchoice=='PALEOS':
+        return densityfuncPALEOSinterp(pressure, temperature)
+    else:
+        raise ValueError('No existing density function chosen')
 
 # calculates new layerboundaries to keep mass inside each layer constant despite new densities
 def newlayerboundaries(layermasses, newdensity, rcore=rcore0, number_of_structure_boundaries = number_of_structure_boundaries):
@@ -631,7 +704,7 @@ def RafromL(Lmet, r, temperaturegradient, K=heatconductivity):
 def deltaTadfromRa(Ra, r, pressure, temperature, density, Menc, K=heatconductivity, meanafter=True):
     L3 = (r[-1]-r[0])**3  # magma ocean depth cubed
     # calculates thermal expansion coefficient
-    alpha = thermalexpansion(pressure)
+    alpha = thermalexpansion(pressure, temperature)
     Cp = Cpfuncsil(temperature)  # calculates specific heat capacity
     g = G*Menc/r**2  # calculates local gravity
     if meanafter:  # mean of Rayleigh numbers
@@ -1378,7 +1451,7 @@ initialMtot = initialMmet+initialvolumes*silicatedensity
 initialdensity = initialMtot/initialvolumes
 
 # compressed structure and (p, T, rho) profile
-rk, psurf, Tsurf, pressure, temperature, density, D, compressioncalctime = restructuringfromdensity(rk, initialdensity, Matmguess, mc0, pebblerate0, number_of_structure_boundaries, number_of_structure_iterations, plotting=False)
+rk, psurf, Tsurf, pressure, temperature, density, D, compressioncalctime = restructuringfromdensity(rk, initialdensity, Matmguess, mc0, pebblerate0, number_of_structure_boundaries, number_of_structure_iterations, plotting=True)
 dr = rk[1]-rk[0] # same layerwidth for all layers
 rsurf = rk[-1]  # new surface is the compressed surface
 layercenters = centeraveraging(rk)
@@ -1473,7 +1546,7 @@ Pvol = np.array([PH2O, PC, PN]) # array of all the volatile species' partition c
 stdmax = cspread*dr # km
 simulatedyears = 0 # start from 0 
 dt = stdmax**2/(2*D) # diffusivity (calculated during restructuring step as enhanced conductivity to model convectivity) limits the timestep since volatile flux only goes to neighboring magma ocean layers
-number_of_timesteps = int(settime/dt)  # compute the number of timesteps
+number_of_timesteps = int(1.2*settime/dt)  # compute the number of timesteps. Extra factor 2 in front just in case dt varies enough
 plotstepspacing = max(plotstepspacing, int(number_of_timesteps/max_number_of_plots))
 savingspacing = max(1, int(number_of_timesteps/max_len_savefiles))
 
